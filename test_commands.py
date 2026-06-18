@@ -38,7 +38,7 @@ class TestKalichCommands(unittest.TestCase):
         mock_reply.assert_called_once()
         args, kwargs = mock_reply.call_args
         self.assertEqual(args[0], self.message)
-        self.assertEqual(args[1], "Система функционирует в штатном режиме.")
+        self.assertEqual(args[1], kalich.messages.PING_NORMAL)
 
     @patch('kalich.reply_safe')
     @patch('kalich.get_user_settings')
@@ -50,7 +50,7 @@ class TestKalichCommands(unittest.TestCase):
         mock_reply.assert_called_once()
         args, kwargs = mock_reply.call_args
         self.assertEqual(args[0], self.message)
-        self.assertEqual(args[1], "Понг! 🦊 Я здесь и работаю без перебоев.")
+        self.assertEqual(args[1], kalich.messages.PING_FLUFFY)
 
     @patch('kalich.reply_safe')
     def test_cmd_cancel(self, mock_reply):
@@ -60,7 +60,7 @@ class TestKalichCommands(unittest.TestCase):
         mock_reply.assert_called_once()
         args, kwargs = mock_reply.call_args
         self.assertEqual(args[0], self.message)
-        self.assertEqual(args[1], "Нечего отменять.")
+        self.assertEqual(args[1], kalich.messages.CANCEL_NOTHING)
 
     @patch('kalich.reply_safe')
     @patch('kalich.get_user_settings')

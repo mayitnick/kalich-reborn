@@ -1,5 +1,6 @@
 # pyrefly: ignore [missing-import]
 import telebot
+import messages
 import json
 import os
 import time
@@ -1760,9 +1761,9 @@ def cmd_ping(message):
     bot.send_chat_action(message.chat.id, 'typing')
     settings = get_user_settings(message.chat.id)
     if settings.get('fluffy_mode'):
-        reply_safe(message, "Понг! 🦊 Я здесь и работаю без перебоев.")
+        reply_safe(message, messages.PING_FLUFFY)
     else:
-        reply_safe(message, "Система функционирует в штатном режиме.")
+        reply_safe(message, messages.PING_NORMAL)
 
 @bot.message_handler(commands=['cancel'])
 def cmd_cancel(message):
@@ -1774,34 +1775,17 @@ def cmd_cancel(message):
             del d[cid]
             canceled = True
     if canceled:
-        reply_safe(message, "Действие отменено. ❌")
+        reply_safe(message, messages.CANCEL_SUCCESS)
     else:
-        reply_safe(message, "Нечего отменять.")
+        reply_safe(message, messages.CANCEL_NOTHING)
 @bot.message_handler(commands=['about'])
 def cmd_about(message):
     settings = get_user_settings(message.chat.id)
     if settings.get('fluffy_mode'):
-        about_text = "👋 Привет! Я — Калич, ваш пушистый помощник по расписанию. 🦊\nЯ делаю расписание лёгким и приятным, а также присылаю уведомления и крутые стикеры. Вот чем я могу помочь:"
+        about_text = messages.ABOUT_FLUFFY
     else:
-        about_text = "Информационная система расписания. Доступные команды:"
-    cmds = [
-        wrap_code("Сегодняㅤ/r:\nВыводит список пар на текущий день с учётом всех замен и совмещённых групп."),
-        wrap_code("Завтра/Поискㅤ/db:\n/db — расписание на завтра.\n/db пн — расписание на день недели.\n/db 16.06.2026 — расписание из истории БД."),
-        wrap_code("Сейчасㅤ/now:\nИнформирует о текущей паре, показывает прогресс-бар и сколько времени осталось до конца."),
-        wrap_code("Дальшеㅤ/next:\nНаходит следующий предмет, его длительность и точное время до начала занятий."),
-        wrap_code("Звонкиㅤ/time:\nПоказывает график всех учебных часов и высчитывает время до конца учебного дня."),
-        wrap_code("Группаㅤ/w:\nПозволяет мгновенно посмотреть расписание любой группы колледжа без оформления подписки."),
-        wrap_code("Кабинетㅤ/f:\nСканирует все группы и находит, кто именно сейчас занимает конкретную аудиторию."),
-        wrap_code("Заменаㅤ/mem:\nПозволяет переименовать скучный предмет во что-то весёлое лично для вашего чата."),
-        wrap_code("Стикерㅤ/setsticker:\nПривязывает ваш стикер к предмету, чтобы бот кидал его при упоминании этой пары."),
-        wrap_code("Стикерыㅤ/s1 /s2 /s3:\nСоздает стикер выбранным шрифтом."),
-        wrap_code("Эффектыㅤ/s_fire /s_blood /s_glitch:\nДобавляет тексту огонь, кровь или глитч-эффект."),
-        wrap_code("Голосㅤ/gs:\nОзвучивает текст с эффектами (chip, demon, echo, robot, radio, vibe, slow, fast, reverb). Поддерживает 70+ языков!"),
-        wrap_code("Языкиㅤ/langs:\nПоказывает все доступные языки для озвучки."),
-        wrap_code("Голос. расписаниеㅤ/r_voice:\nОзвучивает сегодняшнее расписание."),
-        wrap_code("Списокㅤ/list:\nВыводит перечень всех групп, за изменениями в которых следит данный чат."),
-        wrap_code("Отпискаㅤ/unsub:\nПолностью удаляет все активные подписки и прекращает автоматический мониторинг.")
-    ]
+        about_text = messages.ABOUT_NORMAL
+    cmds = [wrap_code(c) for c in messages.ABOUT_COMMANDS]
     reply_safe(message, about_text + "\n\n" + "\n\n".join(cmds))
 
 # ====== HELP COMMAND ======
@@ -1809,51 +1793,12 @@ def cmd_about(message):
 def cmd_help(message):
     bot.send_chat_action(message.chat.id, 'typing')
     """Send a detailed help message with usage instructions for all bot commands."""
-    help_text = (
-        "📖 *Справка по командам бота*\n"
-        "\n"
-        "*Общие команды*\n"
-        "/start — Инициализация и приветствие.\n"
-        "/help — Показать это справочное сообщение.\n"
-        "/about — Информация о боте и его авторе.\n"
-        "\n"
-        "*Расписание*\n"
-        "/r — Расписание на сегодня (или расписание преподавателя).\n"
-        "/db [день|дата] — Расписание на день недели (пн, вт... сб) или дату (DD.MM.YYYY).\n"
-        "/now — Текущее занятие и прогресс текущего блока.\n"
-        "/next — Следующее занятие по расписанию.\n"
-        "\n"
-        "*Время и статус*\n"
-        "/time — Время до конца учебного дня и список звонков.\n"
-    )
+    help_text = messages.HELP_TEXT_MAIN
 
     if is_teacher(message.chat.id):
-        help_text += (
-            "\n"
-            "*Для преподавателей*\n"
-            "/move — Замена кабинета или предмета. Форматы:\n"
-            "• `/move <пара> <кабинет>` — Все группы на сегодня.\n"
-            "• `/move <пара> <кабинет> <группа>` — Для конкретной группы.\n"
-            "• `/move <день> <пара> <кабинет>` — Замена на другой день.\n"
-            "• `/move <пара> п=<предмет>` — Изменить только предмет.\n"
-            "• `/move clear` — Сбросить все свои замены на сегодня.\n"
-        )
+        help_text += messages.HELP_TEXT_TEACHER
 
-    help_text += (
-        "\n"
-        "*Стикеры и кастомизация*\n"
-        "/setsticker <предмет> — Привязать стикер к предмету.\n"
-        "/cs — Очистить все привязки стикеров в этом чате.\n"
-        "/mem <старое> - <новое> — Добавить замену названия предмета.\n"
-        "\n"
-        "*Управление подписками*\n"
-        "/list — Показать ваши текущие подписки.\n"
-        "/unsub — Удалить все подписки (и профиль учителя).\n"
-        "\n"
-        "-----------------------------------------\n"
-        "📢 *Дополнительная информация:*\n"
-        "Бот автоматически отправляет уведомления об изменениях в расписании и заменах. Все команды понимают названия дней как на русском, так и на английском языке."
-    )
+    help_text += messages.HELP_TEXT_EXTRA
     reply_safe(message, help_text)
 
 def get_next_block_info(cid, department, gid, day, data, current_idx=None):
