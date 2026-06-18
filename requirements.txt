@@ -6,4 +6,5 @@ Pillow
 gtts
 pydub
 python-dotenv
-audioop-lts; python_version >= "3.13"
+pytest
+audioop-lts; python_version >= "3.13"
