@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import telebot
 import json
 import os
@@ -12,8 +13,10 @@ import logging
 import io
 import textwrap
 from datetime import datetime, timedelta
+from typing import cast, Any
 from bs4 import BeautifulSoup
 import urllib3
+import urllib.request
 from PIL import Image, ImageDraw, ImageFont
 from gtts import gTTS
 from pydub import AudioSegment
@@ -22,14 +25,27 @@ from dotenv import load_dotenv
 load_dotenv()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+def requests_get_no_proxy(*args, **kwargs):
+    s = requests.Session()
+    s.trust_env = False
+    return s.get(*args, **kwargs)
+
 # ====== КОНФИГУРАЦИЯ ======
-BOT_TOKEN = os.getenv('BOT_TOKEN')
+BOT_TOKEN = os.getenv('BOT_TOKEN') or ""
 MONITORS_FILE = 'active_monitors.json'
 CUSTOM_NAMES_FILE = 'custom_names.json'
 GROUPS_CACHE_FILE = 'groups_cache.json'
 DB_FILE = 'schedules.db'
-MODERATOR_ID = int(os.getenv('MODERATOR_ID'))
-LOG_GROUP_ID = int(os.getenv('LOG_GROUP_ID'))
+MODERATOR_IDS = []
+mod_ids_env = os.getenv('MODERATOR_ID')
+if mod_ids_env:
+    for item in mod_ids_env.split(','):
+        try:
+            MODERATOR_IDS.append(int(item.strip()))
+        except ValueError:
+            pass
+MODERATOR_ID = MODERATOR_IDS[0] if MODERATOR_IDS else None
+LOG_GROUP_ID = int(os.getenv('LOG_GROUP_ID') or 0)
 
 SCHEDULE_CACHE = {}
 
@@ -41,6 +57,25 @@ SPECIAL_CHATS = {
     -1002949492641: 27602,
     -1003018365933: 360
 }
+special_chats_env = os.getenv('SPECIAL_CHATS')
+if special_chats_env:
+    SPECIAL_CHATS = {}
+    for item in special_chats_env.split(','):
+        if ':' in item:
+            try:
+                chat_id, thread_id = item.split(':')
+                SPECIAL_CHATS[int(chat_id.strip())] = int(thread_id.strip())
+            except ValueError:
+                pass
+
+APPROVED_TEACHER_IDS = []
+teacher_ids_env = os.getenv('TEACHER_IDS')
+if teacher_ids_env:
+    for tid in teacher_ids_env.split(','):
+        try:
+            APPROVED_TEACHER_IDS.append(int(tid.strip()))
+        except ValueError:
+            pass
 
 STICKERS = [
     "CAACAgIAAxkBAAIFPWlzJxrefHjYHVfxp1jM4bAH5fCBAAI-EgACHJpIS7jVPGp6rA90OAQ",
@@ -78,6 +113,11 @@ waiting_for_teacher_dept = {}   # chat_id -> True (учитель выбирае
 waiting_for_teacher_rooms = {}  # chat_id -> dept (учитель вводит кабинеты)
 waiting_for_move = {}  # chat_id -> dict with step, lesson, room, group
 
+system_proxies = urllib.request.getproxies()
+if system_proxies:
+    from telebot import apihelper
+    cast(Any, apihelper).proxy = system_proxies
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ====== ДИНАМИЧЕСКИЙ ПАРСЕР ГРУПП ======
@@ -106,11 +146,11 @@ def update_groups_cache():
     for dep in [1, 2, 3]:
         url = f"https://xn----{dep}-iddzneycrmpn.xn--p1ai/lesson_table_show/"
         try:
-            r = requests.get(url, timeout=10, verify=False, headers=headers)
+            r = requests_get_no_proxy(url, timeout=10, verify=False, headers=headers)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
                 for a in soup.find_all("a", href=True):
-                    href = a['href']
+                    href = str(a['href'])
                     if '?group_id=' in href:
                         try:
                             gid = int(href.split('group_id=')[1].split('&')[0])
@@ -344,9 +384,19 @@ custom_names_manager = CustomNamesManager()
 def is_teacher(chat_id):
     """Проверяет, одобрен ли пользователь как учитель."""
     conn = sqlite3.connect(DB_FILE)
-    res = conn.execute("SELECT 1 FROM teachers WHERE chat_id=? AND status='approved'", (chat_id,)).fetchone()
+    res = conn.execute("SELECT status FROM teachers WHERE chat_id=?", (chat_id,)).fetchone()
+    if res:
+        status = res[0]
+        if status == 'approved':
+            conn.close()
+            return True
+        if chat_id in APPROVED_TEACHER_IDS:
+            conn.execute("UPDATE teachers SET status='approved' WHERE chat_id=?", (chat_id,))
+            conn.commit()
+            conn.close()
+            return True
     conn.close()
-    return res is not None
+    return False
 
 def get_teacher_info(chat_id):
     """Возвращает (department, rooms_list) для одобренного учителя."""
@@ -385,7 +435,7 @@ def get_teacher_schedule(chat_id, day, all_data):
                         has_lunch = True
                         break
             if has_lunch:
-                schedule[idx].append((None, "ОБЕД", None))
+                schedule[idx].append(("", "ОБЕД", ""))
                 
     return dept, rooms, schedule
 
@@ -442,7 +492,9 @@ def cmd_teacher_r(message, day=None, label=None):
             room = extract_room(l_str)
             if room and any(r.strip() in room for r in rooms):
                 # Слот принадлежит учителю — берём АКТУАЛЬНЫЕ данные с заменами
-                overridden_lessons = overridden_data.get((dep, gid), lessons)
+                overridden_lessons = overridden_data.get((dep, gid))
+                if overridden_lessons is None:
+                    overridden_lessons = lessons
                 if idx < len(overridden_lessons):
                     o_str = str(overridden_lessons[idx])
                     o_room = extract_room(o_str) or room
@@ -462,7 +514,7 @@ def cmd_teacher_r(message, day=None, label=None):
                         has_lunch = True
                         break
             if has_lunch:
-                schedule[idx].append((None, "ОБЕД", None))
+                schedule[idx].append(("", "ОБЕД", ""))
     
     rooms_str = ', '.join(rooms)
     if label is None:
@@ -692,8 +744,9 @@ def send_teacher_override_notifications_for_day(day):
             lines.append(f"{slot_idx + 1}. {' | '.join(parts) if parts else orig_subj}")
         msg = "\n".join(lines)
         try:
+            thread_id = m.get('message_thread_id') or SPECIAL_CHATS.get(m['chat_id'])
             bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown',
-                             message_thread_id=SPECIAL_CHATS.get(m['chat_id']))
+                             message_thread_id=thread_id)
         except Exception as e:
             print(f"Override notify error: {e}")
     # Помечаем как отправленные
@@ -736,7 +789,7 @@ def fetch_lessons(day, group_id, department):
         v = random.randint(1, 999999)
         url = f"https://xn----{department}-iddzneycrmpn.xn--p1ai/lesson_table_show/?day={day}&group_id={group_id}&v={v}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(url, timeout=15, verify=False, headers=headers)
+        r = requests_get_no_proxy(url, timeout=15, verify=False, headers=headers)
         soup = BeautifulSoup(r.text, "html.parser")
         lessons = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 1]
         filters = SYSTEM_FILTERS.get(department, SYSTEM_FILTERS[3])
@@ -902,7 +955,7 @@ def get_language_code(text):
 
 def process_audio_effects(voice_io, effect=None):
     try:
-        song = AudioSegment.from_file(voice_io, format="mp3")
+        song: Any = AudioSegment.from_file(voice_io, format="mp3")
         if effect == "chip":
             new_sample_rate = int(song.frame_rate * 1.5)
             song = song._spawn(song.raw_data, overrides={'frame_rate': new_sample_rate})
@@ -931,7 +984,10 @@ def process_audio_effects(voice_io, effect=None):
                     chunks.append(chunk - 10)
                 else:
                     chunks.append(chunk)
-            song = sum(chunks)
+            if chunks:
+                song = chunks[0]
+                for chunk in chunks[1:]:
+                    song += chunk
         elif effect == "reverb":
             reverb = song - 15
             for i in range(1, 4):
@@ -980,9 +1036,10 @@ def send_updates_for_day(day, data):
         cur = conn.execute("SELECT last_msg_hash FROM user_notifications WHERE chat_id=? AND department=? AND group_id=? AND day=?", 
                            (m['chat_id'], dep, gid, day))
         row = cur.fetchone()
+        thread_id = m.get('message_thread_id') or SPECIAL_CHATS.get(m['chat_id'])
         if row is None:
             try:
-                bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=SPECIAL_CHATS.get(m['chat_id']))
+                bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=thread_id)
                 conn.execute("INSERT INTO user_notifications (chat_id, department, group_id, day, last_msg_hash) VALUES (?, ?, ?, ?, ?)",
                              (m['chat_id'], dep, gid, day, msg_hash))
                 conn.commit()
@@ -990,7 +1047,7 @@ def send_updates_for_day(day, data):
                 print(f"Error sending update: {e}")
         elif row[0] != msg_hash:
             try:
-                bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=SPECIAL_CHATS.get(m['chat_id']))
+                bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=thread_id)
                 conn.execute("UPDATE user_notifications SET last_msg_hash=? WHERE chat_id=? AND department=? AND group_id=? AND day=?",
                              (msg_hash, m['chat_id'], dep, gid, day))
                 conn.commit()
@@ -1540,7 +1597,7 @@ def cmd_r_voice(message):
 
 @bot.message_handler(commands=['flush'])
 def cmd_flush(message):
-    if message.from_user.id == MODERATOR_ID:
+    if message.from_user.id in MODERATOR_IDS:
         conn = sqlite3.connect(DB_FILE)
         conn.execute("DELETE FROM schedules")
         conn.commit()
@@ -1593,7 +1650,7 @@ def cmd_start(message):
 @bot.callback_query_handler(func=lambda c: c.data.startswith('approve_teacher_') or c.data.startswith('deny_teacher_'))
 def handle_teacher_approval(call):
     """Callback-обработчик одобрения/отклонения учителя модератором."""
-    if call.from_user.id != MODERATOR_ID:
+    if call.from_user.id not in MODERATOR_IDS:
         return bot.answer_callback_query(call.id, "Нет доступа.")
     parts = call.data.split('_')
     action = parts[0]  # 'approve' или 'deny'
@@ -1676,7 +1733,7 @@ def handle_settings_toggle(call):
         set_user_setting(chat_id, 'fluffy_mode', new_val)
     elif call.data == "cycle_voice_effect":
         effects = ['echo', 'robot', 'chip', 'demon', 'radio', 'vibe', 'slow', 'fast', 'reverb', 'none']
-        current = settings.get('voice_effect', 'echo')
+        current = str(settings.get('voice_effect', 'echo'))
         try:
             nxt_idx = (effects.index(current) + 1) % len(effects)
         except ValueError:
@@ -1712,11 +1769,7 @@ def cmd_cancel(message):
     bot.send_chat_action(message.chat.id, 'typing')
     cid = message.chat.id
     canceled = False
-    try:
-        from kalich import waiting_for_department, user_department, waiting_for_teacher_dept, waiting_for_teacher_rooms, waiting_for_sticker_item
-    except:
-        pass
-    for d in (waiting_for_department, user_department, waiting_for_teacher_dept, waiting_for_teacher_rooms, waiting_for_sticker_item):
+    for d in (waiting_for_department, user_department, waiting_for_teacher_dept, waiting_for_teacher_rooms, waiting_for_sticker):
         if cid in d:
             del d[cid]
             canceled = True
@@ -1885,7 +1938,7 @@ def format_lessons_count(count):
 @bot.message_handler(commands=['sendall'])
 def cmd_sendall(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    if message.from_user.id != MODERATOR_ID:
+    if message.from_user.id not in MODERATOR_IDS:
         return
     source_text = ""
     if message.reply_to_message:
@@ -1898,10 +1951,15 @@ def cmd_sendall(message):
     full_block_text = f"```{header}\n{source_text}```"
     found_commands = re.findall(r'(/[a-zA-Z0-9_]+)', source_text)
     commands_message = " ".join(dict.fromkeys(found_commands))
-    target_chats = set(m['chat_id'] for m in monitor_manager.active_monitors.values())
-    for cid in target_chats:
+    sent_targets = set()
+    for m in monitor_manager.active_monitors.values():
+        cid = m['chat_id']
+        thread = m.get('message_thread_id') or SPECIAL_CHATS.get(cid)
+        target_key = (cid, thread)
+        if target_key in sent_targets:
+            continue
+        sent_targets.add(target_key)
         try:
-            thread = SPECIAL_CHATS.get(cid)
             bot.send_message(cid, full_block_text, parse_mode='Markdown', message_thread_id=thread)
             if commands_message:
                 bot.send_message(cid, commands_message, message_thread_id=thread)
@@ -1938,7 +1996,8 @@ def cmd_find_by_room(message):
             l_str = str(lessons[idx])
             room = extract_room(l_str)
             if room and room_target in room:
-                subj = re.sub(r'\s*\([^)]*\)$', '', custom_names_manager.apply(message.chat.id, l_str)).strip()
+                applied = custom_names_manager.apply(message.chat.id, l_str) or ""
+                subj = re.sub(r'\s*\([^)]*\)$', '', applied).strip()
                 if subj:
                     if subj not in schedule[idx]:
                         schedule[idx][subj] = []
@@ -1991,7 +2050,7 @@ def cmd_find_by_group(message):
         res = f"Группа {target_group}:\n\n"
         cnt = 1
         for i, l in enumerate(lessons):
-            lines = format_with_overlap(message.chat.id, department, gid, day, i, str(l), all_day_data)
+            lines = format_with_overlap(message.chat.id, department, gid, day, i, l, all_day_data)
             if not lines: continue
             if day == 1 and cnt == 1 and lines: lines[0] = lines[0] + " +К/Ч"
             res += f"{cnt}. {lines[0]}\n"
@@ -2004,7 +2063,7 @@ def cmd_find_by_group(message):
 @bot.message_handler(commands=['fill'])
 def cmd_fill(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    if message.from_user.id != MODERATOR_ID: return
+    if message.from_user.id not in MODERATOR_IDS: return
     reply_safe(message, "⏳ Заполнение базы (ПН-ПТ) для всех отделений...")
     try:
         c = 0
@@ -2051,7 +2110,8 @@ def morning_broadcast():
                                 if len(lines) > 1: res += f"   {lines[1]}\n"
                                 cnt += 1
                             try:
-                                bot.send_message(cid, wrap_code(res.strip()), parse_mode='Markdown', message_thread_id=SPECIAL_CHATS.get(cid))
+                                thread_id = m.get('message_thread_id') or SPECIAL_CHATS.get(cid)
+                                bot.send_message(cid, wrap_code(res.strip()), parse_mode='Markdown', message_thread_id=thread_id)
                             except: pass
                 sent_today = True
             if now.hour == 8:
@@ -2146,32 +2206,41 @@ def handle_all(message):
             u = message.from_user
             teacher_name = (u.first_name or "") + (f" {u.last_name}" if u.last_name else "")
             username_str = f" (@{u.username})" if u.username else ""
+            status = 'approved' if chat_id in APPROVED_TEACHER_IDS else 'pending'
             conn = sqlite3.connect(DB_FILE)
             conn.execute(
-                "INSERT OR REPLACE INTO teachers (chat_id, department, rooms, name, status) VALUES (?, ?, ?, ?, 'pending')",
-                (chat_id, dept, json.dumps(rooms_raw, ensure_ascii=False), teacher_name)
+                "INSERT OR REPLACE INTO teachers (chat_id, department, rooms, name, status) VALUES (?, ?, ?, ?, ?)",
+                (chat_id, dept, json.dumps(rooms_raw, ensure_ascii=False), teacher_name, status)
             )
             conn.commit()
             conn.close()
             del waiting_for_teacher_rooms[chat_id]
-            reply_safe(message, "⏳ Заявка отправлена на проверку модератору.\nОжидайте одобрения — вы получите уведомление.")
-            # Уведомляем модератора с inline-кнопками
-            markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(
-                telebot.types.InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_teacher_{chat_id}"),
-                telebot.types.InlineKeyboardButton("❌ Отклонить", callback_data=f"deny_teacher_{chat_id}")
-            )
-            mod_text = (
-                f"🧑‍🏫 Заявка учителя\n"
-                f"Имя: {teacher_name}{username_str}\n"
-                f"ID: {chat_id}\n"
-                f"Отделение: {dept}\n"
-                f"Кабинеты: {', '.join(rooms_raw)}"
-            )
-            try:
-                bot.send_message(MODERATOR_ID, mod_text, reply_markup=markup)
-            except Exception as e:
-                logger.error(f"Failed to notify moderator: {e}")
+
+            if status == 'approved':
+                reply_safe(message, "✅ Вы успешно зарегистрированы как учитель! Доступные команды:\n/r, /db, /now, /next, /time, /f, /list")
+            else:
+                reply_safe(message, "⏳ Заявка отправлена на проверку модератору.\nОжидайте одобрения — вы получите уведомление.")
+                # Уведомляем модератора с inline-кнопками
+                markup = telebot.types.InlineKeyboardMarkup()
+                markup.add(
+                    telebot.types.InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_teacher_{chat_id}"),
+                    telebot.types.InlineKeyboardButton("❌ Отклонить", callback_data=f"deny_teacher_{chat_id}")
+                )
+                mod_text = (
+                    f"🧑‍🏫 Заявка учителя\n"
+                    f"Имя: {teacher_name}{username_str}\n"
+                    f"ID: {chat_id}\n"
+                    f"Отделение: {dept}\n"
+                    f"Кабинеты: {', '.join(rooms_raw)}"
+                )
+                try:
+                    for mod_id in MODERATOR_IDS:
+                        try:
+                            bot.send_message(mod_id, mod_text, reply_markup=markup)
+                        except Exception as e:
+                            logger.error(f"Failed to notify moderator {mod_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to notify moderators: {e}")
         else:
             bot.send_message(chat_id, "Введите хотя бы один номер кабинета через запятую.")
         return
@@ -2205,7 +2274,8 @@ def handle_all(message):
             mid = f"{chat_id}_{dept}_{found_gid}"
             monitor_manager.active_monitors[mid] = {
                 "chat_id": chat_id, "group_id": found_gid, 
-                "group_name": found_name, "department": dept
+                "group_name": found_name, "department": dept,
+                "message_thread_id": getattr(message, 'message_thread_id', None)
             }
             monitor_manager.save()
             del user_department[chat_id]
@@ -2222,7 +2292,8 @@ def handle_all(message):
             mid = f"{chat_id}_{dept}_{gid}"
             monitor_manager.active_monitors[mid] = {
                 "chat_id": chat_id, "group_id": gid, 
-                "group_name": k, "department": dept
+                "group_name": k, "department": dept,
+                "message_thread_id": getattr(message, 'message_thread_id', None)
             }
             monitor_manager.save()
             return reply_safe(message, f"✅ {k} активна!")
@@ -2242,5 +2313,6 @@ if __name__ == '__main__':
     while True:
         try:
             bot.polling(non_stop=True, interval=0, timeout=60)
-        except:
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Polling error: {e}")
             time.sleep(10)
