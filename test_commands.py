@@ -75,8 +75,10 @@ class TestKalichCommands(unittest.TestCase):
         self.assertIn("Сегодняㅤ/r", args[1])
 
     @patch('kalich.reply_safe')
-    def test_cmd_help(self, mock_reply):
+    @patch('kalich.is_teacher')
+    def test_cmd_help(self, mock_is_teacher, mock_reply):
         # Тестируем команду /help
+        mock_is_teacher.return_value = False
         kalich.cmd_help(self.message)
         
         mock_reply.assert_called_once()
