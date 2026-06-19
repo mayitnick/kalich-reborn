@@ -1,4 +1,6 @@
 # pyrefly: ignore [missing-import]
+import time
+_kalich_start_time = time.perf_counter()
 #  ___  __        ________      ___           ___      ________      ___  ___     
 # |\  \|\  \     |\   __  \    |\  \         |\  \    |\   ____\    |\  \|\  \    
 # \ \  \/  /|_   \ \  \|\  \   \ \  \        \ \  \   \ \  \___|    \ \  \\\  \   
@@ -3774,6 +3776,9 @@ if __name__ == '__main__':
     threading.Thread(target=background_group_updater, daemon=True).start()
     threading.Thread(target=check_loop, daemon=True).start()
     threading.Thread(target=morning_broadcast, daemon=True).start()
+    
+    init_time = time.perf_counter() - _kalich_start_time
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Инициализация кода и баз данных завершена за {init_time:.3f} сек.")
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Бот запущен в бессмертном режиме.")
     print(f"Групп в кэше: {len(GROUP_NAME_TO_ID)}")
     while True:
