@@ -40,10 +40,10 @@ def requests_get_no_proxy(*args, **kwargs):
 
 # ====== КОНФИГУРАЦИЯ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN') or ""
-MONITORS_FILE = 'active_monitors.json'
-CUSTOM_NAMES_FILE = 'custom_names.json'
-GROUPS_CACHE_FILE = 'groups_cache.json'
-DB_FILE = 'schedules.db'
+MONITORS_FILE = 'data/active_monitors.json'
+CUSTOM_NAMES_FILE = 'data/custom_names.json'
+GROUPS_CACHE_FILE = 'data/groups_cache.json'
+DB_FILE = 'data/schedules.db'
 MODERATOR_IDS = []
 mod_ids_env = os.getenv('MODERATOR_ID')
 if mod_ids_env:

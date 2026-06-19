@@ -36,6 +36,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+.coverage
 htmlcov/
 .tox/
 .nosexy
@@ -57,10 +58,7 @@ venv.bak/
 .idea/
 
 # Local databases and JSON caches
-schedules.db
-active_monitors.json
-custom_names.json
-groups_cache.json
+data/
 
 # Local debug/test scripts
 debug_override.py
