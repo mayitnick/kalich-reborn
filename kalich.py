@@ -1,30 +1,40 @@
 # pyrefly: ignore [missing-import]
-import matplotlib.pyplot as plt  # noqa: E402
-import telebot
-import messages
-import json
-import os
-import time
-import threading
-import requests
-import re
-import hashlib
-import sqlite3
-import random
-import logging
+#  ___  __        ________      ___           ___      ________      ___  ___     
+# |\  \|\  \     |\   __  \    |\  \         |\  \    |\   ____\    |\  \|\  \    
+# \ \  \/  /|_   \ \  \|\  \   \ \  \        \ \  \   \ \  \___|    \ \  \\\  \   
+#  \ \   ___  \   \ \   __  \   \ \  \        \ \  \   \ \  \        \ \   __  \  
+#   \ \  \\ \  \   \ \  \ \  \   \ \  \____    \ \  \   \ \  \____    \ \  \ \  \ 
+#    \ \__\\ \__\   \ \__\ \__\   \ \_______\   \ \__\   \ \_______\   \ \__\ \__\
+#     \|__| \|__|    \|__|\|__|    \|_______|    \|__|    \|_______|    \|__|\|__|
+                                                                                
+                                                                                
+                                                                                
 import io
+import os
+import re
+import json
+import time
+import random
+import hashlib
+import logging
+import sqlite3
+import telebot
+import urllib3
+import messages
+import requests
 import textwrap
+import threading
+import matplotlib
 import collections
-from datetime import datetime, timedelta
+from gtts import gTTS
+import urllib.request
 from typing import cast, Any
 from bs4 import BeautifulSoup
-import urllib3
-import urllib.request
-from PIL import Image, ImageDraw, ImageFont
-from gtts import gTTS
-from pydub import AudioSegment
 from dotenv import load_dotenv
-import matplotlib
+from pydub import AudioSegment
+from datetime import datetime, timedelta
+from PIL import Image, ImageDraw, ImageFont
+import matplotlib.pyplot as plt  # noqa: E402
 matplotlib.use('Agg')
 
 
