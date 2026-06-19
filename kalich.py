@@ -12,6 +12,7 @@ import random
 import logging
 import io
 import textwrap
+import collections
 from datetime import datetime, timedelta
 from typing import cast, Any
 from bs4 import BeautifulSoup
@@ -21,6 +22,10 @@ from PIL import Image, ImageDraw, ImageFont
 from gtts import gTTS
 from pydub import AudioSegment
 from dotenv import load_dotenv
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 
 load_dotenv()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -112,6 +117,8 @@ user_department = {}          # chat_id -> выбранное отделение
 waiting_for_teacher_dept = {}   # chat_id -> True (учитель выбирает отделение)
 waiting_for_teacher_rooms = {}  # chat_id -> dept (учитель вводит кабинеты)
 waiting_for_move = {}  # chat_id -> dict with step, lesson, room, group
+waiting_for_stats_dates = {}  # chat_id -> True (ожидание ввода дат для статистики)
+stats_context = {}  # chat_id -> dict (текущий контекст просмотра статистики)
 
 system_proxies = urllib.request.getproxies()
 if system_proxies:
@@ -323,6 +330,454 @@ def extract_room(lesson_text):
     if last_close == -1 or last_close < first_open:
         return None
     return lesson_text[first_open+1:last_close].strip()
+
+
+# ====== АНАЛИТИКА И ГРАФИКИ ======
+
+def parse_date_range(text):
+    """Парсит даты в формате ДД.ММ.ГГГГ - ДД.ММ.ГГГГ или одну дату."""
+    if not text:
+        return None, None
+    matches = re.findall(r'(\d{2})\.(\d{2})\.(\d{4})', text)
+    if not matches:
+        return None, None
+    
+    dates = []
+    for d, m, y in matches:
+        try:
+            dt = datetime(int(y), int(m), int(d))
+            dates.append(dt.strftime('%Y-%m-%d'))
+        except ValueError:
+            continue
+            
+    if len(dates) == 1:
+        return dates[0], dates[0]
+    elif len(dates) >= 2:
+        d1, d2 = dates[0], dates[1]
+        if d1 > d2:
+            return d2, d1
+        return d1, d2
+    return None, None
+
+def apply_chart_style():
+    """Применяет темную тему для графиков Matplotlib."""
+    plt.style.use('dark_background')
+    plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Segoe UI', 'Arial', 'sans-serif']
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['figure.facecolor'] = '#181825'
+    plt.rcParams['axes.facecolor'] = '#1e1e2e'
+    plt.rcParams['axes.edgecolor'] = '#45475a'
+    plt.rcParams['axes.labelcolor'] = '#cdd6f4'
+    plt.rcParams['xtick.color'] = '#bac2de'
+    plt.rcParams['ytick.color'] = '#bac2de'
+    plt.rcParams['grid.color'] = '#313244'
+    plt.rcParams['text.color'] = '#cdd6f4'
+
+def generate_group_subject_chart(group_id, department, group_name, start_date=None, end_date=None, chat_id=None):
+    """Генерирует круговую/столбчатую диаграмму предметов для группы."""
+    conn = sqlite3.connect(DB_FILE)
+    query = "SELECT lessons_text FROM schedule_history WHERE group_id = ? AND department = ?"
+    params = [group_id, department]
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+        
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    
+    subject_counts = collections.Counter()
+    for (lessons_json,) in rows:
+        try:
+            lessons = json.loads(lessons_json)
+        except Exception:
+            continue
+        for lesson in lessons:
+            l_str = str(lesson).strip()
+            if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
+                continue
+            
+            if chat_id:
+                applied = custom_names_manager.apply(chat_id, l_str)
+                if not applied:
+                    continue
+                l_str = applied
+                
+            subj = re.sub(r'\s*\(.*$', '', l_str).strip()
+            if subj:
+                subject_counts[subj] += 1
+                
+    if not subject_counts:
+        return None
+        
+    apply_chart_style()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    sorted_data = sorted(subject_counts.items(), key=lambda x: x[1])
+    subjects = [x[0] for x in sorted_data]
+    counts = [x[1] for x in sorted_data]
+    
+    colors = ['#89b4fa', '#b4befe', '#cba6f7', '#f5c2e7', '#a6e3a1', '#f9e2af', '#fab387', '#f38ba8']
+    bar_colors = [colors[i % len(colors)] for i in range(len(subjects))]
+    
+    bars = ax.barh(subjects, counts, color=bar_colors, edgecolor='#1e1e2e', height=0.6)
+    
+    for bar in bars:
+        width = bar.get_width()
+        pairs = width / 2
+        pairs_str = f" ({pairs:.1f}п)" if pairs % 1 != 0 else f" ({int(pairs)}п)"
+        ax.text(width + 0.1, bar.get_y() + bar.get_height()/2, f'{int(width)}ч{pairs_str}', 
+                va='center', ha='left', color='#cdd6f4', fontweight='bold', fontsize=9)
+                
+    date_range_str = ""
+    if start_date and end_date:
+        if start_date == end_date:
+            date_range_str = f" за {start_date}"
+        else:
+            date_range_str = f" с {start_date} по {end_date}"
+            
+    ax.set_title(f"Распределение часов по предметам{date_range_str}\nГруппа: {group_name}", fontsize=12, pad=15, fontweight='bold')
+    ax.set_xlabel("Академические часы (пара = 2 ч)", labelpad=10)
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
+
+def generate_group_daily_chart(group_id, department, group_name, start_date=None, end_date=None):
+    """Генерирует график нагрузки группы по дням."""
+    conn = sqlite3.connect(DB_FILE)
+    query = "SELECT date, lessons_text FROM schedule_history WHERE group_id = ? AND department = ?"
+    params = [group_id, department]
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+    query += " ORDER BY date ASC"
+    
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    
+    daily_stats = {}
+    for date_str, lessons_json in rows:
+        try:
+            lessons = json.loads(lessons_json)
+        except Exception:
+            continue
+        hours = sum(1 for l in lessons if str(l).strip() and str(l).strip().lower() != "обед" and str(l).strip() not in ["—", "о", "О", "x", "X", "."])
+        parts = date_str.split('-')
+        formatted_date = f"{parts[2]}.{parts[1]}"
+        daily_stats[formatted_date] = hours
+        
+    if not daily_stats:
+        return None
+        
+    apply_chart_style()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    dates = list(daily_stats.keys())
+    counts = list(daily_stats.values())
+    
+    bars = ax.bar(dates, counts, color='#94e2d5', edgecolor='#1e1e2e', width=0.4 if len(dates) > 1 else 0.2)
+    
+    for bar in bars:
+        height = bar.get_height()
+        pairs = height / 2
+        pairs_str = f" ({pairs:.1f}п)" if pairs % 1 != 0 else f" ({int(pairs)}п)"
+        ax.text(bar.get_x() + bar.get_width()/2, height + 0.1, f'{int(height)}ч{pairs_str}', 
+                va='bottom', ha='center', color='#cdd6f4', fontweight='bold', fontsize=9)
+                
+    date_range_str = ""
+    if start_date and end_date:
+        if start_date == end_date:
+            date_range_str = f" за {start_date}"
+        else:
+            date_range_str = f" с {start_date} по {end_date}"
+            
+    ax.set_title(f"Учебная нагрузка по дням{date_range_str}\nГруппа: {group_name}", fontsize=12, pad=15, fontweight='bold')
+    ax.set_ylabel("Академические часы", labelpad=10)
+    ax.set_ylim(0, max(counts) + 2 if counts else 10)
+    ax.grid(axis='y', linestyle='--', alpha=0.3)
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
+
+def get_teacher_aggregated_data(teacher_rooms, department, start_date=None, end_date=None, chat_id=None):
+    """Стягивает агрегированные данные по кабинетам преподавателя."""
+    conn = sqlite3.connect(DB_FILE)
+    query = "SELECT date, group_id, lessons_text FROM schedule_history WHERE department = ?"
+    params = [department]
+    if start_date:
+        query += " AND date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND date <= ?"
+        params.append(end_date)
+    
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    
+    teacher_active_slots_by_date = collections.defaultdict(set)
+    hours_by_group = collections.Counter()
+    hours_by_subject = collections.Counter()
+    
+    for date_str, group_id, lessons_json in rows:
+        try:
+            lessons = json.loads(lessons_json)
+        except Exception:
+            continue
+            
+        group_name = GROUP_ID_TO_NAME.get(department, {}).get(group_id, f"Гр. {group_id}")
+        
+        for idx, lesson in enumerate(lessons):
+            l_str = str(lesson).strip()
+            if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
+                continue
+                
+            room = extract_room(l_str)
+            if room and any(r.strip() in room for r in teacher_rooms):
+                teacher_active_slots_by_date[date_str].add(idx)
+                
+                subj = re.sub(r'\s*\(.*$', '', l_str).strip()
+                if chat_id:
+                    applied = custom_names_manager.apply(chat_id, l_str)
+                    if applied:
+                        subj = re.sub(r'\s*\(.*$', '', applied).strip()
+                
+                hours_by_group[group_name] += 1
+                hours_by_subject[subj] += 1
+                
+    hours_by_date = {d: len(slots) for d, slots in teacher_active_slots_by_date.items()}
+    sorted_hours_by_date = dict(sorted(hours_by_date.items()))
+    
+    return {
+        "daily": sorted_hours_by_date,
+        "groups": dict(hours_by_group),
+        "subjects": dict(hours_by_subject)
+    }
+
+def generate_teacher_daily_chart(teacher_name, teacher_rooms, department, start_date=None, end_date=None):
+    """Генерирует график нагрузки преподавателя по дням."""
+    data = get_teacher_aggregated_data(teacher_rooms, department, start_date, end_date)
+    daily_stats = data["daily"]
+    if not daily_stats:
+        return None
+        
+    apply_chart_style()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    dates = []
+    for d in daily_stats.keys():
+        parts = d.split('-')
+        dates.append(f"{parts[2]}.{parts[1]}")
+    counts = list(daily_stats.values())
+    
+    bars = ax.bar(dates, counts, color='#fab387', edgecolor='#1e1e2e', width=0.4 if len(dates) > 1 else 0.2)
+    
+    for bar in bars:
+        height = bar.get_height()
+        pairs = height / 2
+        pairs_str = f" ({pairs:.1f}п)" if pairs % 1 != 0 else f" ({int(pairs)}п)"
+        ax.text(bar.get_x() + bar.get_width()/2, height + 0.1, f'{int(height)}ч{pairs_str}', 
+                va='bottom', ha='center', color='#cdd6f4', fontweight='bold', fontsize=9)
+                
+    date_range_str = ""
+    if start_date and end_date:
+        if start_date == end_date:
+            date_range_str = f" за {start_date}"
+        else:
+            date_range_str = f" с {start_date} по {end_date}"
+            
+    rooms_str = ", ".join(teacher_rooms)
+    ax.set_title(f"Преподаватель: {teacher_name} (каб. {rooms_str})\nУчебные часы по дням{date_range_str}", fontsize=11, pad=15, fontweight='bold')
+    ax.set_ylabel("Академические часы", labelpad=10)
+    ax.set_ylim(0, max(counts) + 2 if counts else 10)
+    ax.grid(axis='y', linestyle='--', alpha=0.3)
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
+
+def generate_teacher_groups_chart(teacher_name, teacher_rooms, department, start_date=None, end_date=None):
+    """Генерирует график нагрузки преподавателя по учебным группам."""
+    data = get_teacher_aggregated_data(teacher_rooms, department, start_date, end_date)
+    group_stats = data["groups"]
+    if not group_stats:
+        return None
+        
+    apply_chart_style()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    sorted_data = sorted(group_stats.items(), key=lambda x: x[1])
+    groups = [x[0] for x in sorted_data]
+    counts = [x[1] for x in sorted_data]
+    
+    colors = ['#a6e3a1', '#94e2d5', '#89b4fa', '#b4befe', '#cba6f7', '#f5c2e7', '#fab387', '#f38ba8']
+    bar_colors = [colors[i % len(colors)] for i in range(len(groups))]
+    
+    bars = ax.barh(groups, counts, color=bar_colors, edgecolor='#1e1e2e', height=0.6)
+    
+    for bar in bars:
+        width = bar.get_width()
+        pairs = width / 2
+        pairs_str = f" ({pairs:.1f}п)" if pairs % 1 != 0 else f" ({int(pairs)}п)"
+        ax.text(width + 0.1, bar.get_y() + bar.get_height()/2, f'{int(width)}ч{pairs_str}', 
+                va='center', ha='left', color='#cdd6f4', fontweight='bold', fontsize=9)
+                
+    date_range_str = ""
+    if start_date and end_date:
+        if start_date == end_date:
+            date_range_str = f" за {start_date}"
+        else:
+            date_range_str = f" с {start_date} по {end_date}"
+            
+    rooms_str = ", ".join(teacher_rooms)
+    ax.set_title(f"Преподаватель: {teacher_name} (каб. {rooms_str})\nРаспределение часов по группам{date_range_str}", fontsize=11, pad=15, fontweight='bold')
+    ax.set_xlabel("Академические часы", labelpad=10)
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
+
+def generate_teacher_subjects_chart(teacher_name, teacher_rooms, department, start_date=None, end_date=None, chat_id=None):
+    """Генерирует график распределения предметов у преподавателя."""
+    data = get_teacher_aggregated_data(teacher_rooms, department, start_date, end_date, chat_id)
+    subject_stats = data["subjects"]
+    if not subject_stats:
+        return None
+        
+    apply_chart_style()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    sorted_data = sorted(subject_stats.items(), key=lambda x: x[1])
+    subjects = [x[0] for x in sorted_data]
+    counts = [x[1] for x in sorted_data]
+    
+    colors = ['#89b4fa', '#b4befe', '#cba6f7', '#f5c2e7', '#a6e3a1', '#f9e2af', '#fab387', '#f38ba8']
+    bar_colors = [colors[i % len(colors)] for i in range(len(subjects))]
+    
+    bars = ax.barh(subjects, counts, color=bar_colors, edgecolor='#1e1e2e', height=0.6)
+    
+    for bar in bars:
+        width = bar.get_width()
+        pairs = width / 2
+        pairs_str = f" ({pairs:.1f}п)" if pairs % 1 != 0 else f" ({int(pairs)}п)"
+        ax.text(width + 0.1, bar.get_y() + bar.get_height()/2, f'{int(width)}ч{pairs_str}', 
+                va='center', ha='left', color='#cdd6f4', fontweight='bold', fontsize=9)
+                
+    date_range_str = ""
+    if start_date and end_date:
+        if start_date == end_date:
+            date_range_str = f" за {start_date}"
+        else:
+            date_range_str = f" с {start_date} по {end_date}"
+            
+    rooms_str = ", ".join(teacher_rooms)
+    ax.set_title(f"Преподаватель: {teacher_name} (каб. {rooms_str})\nНагрузка по предметам{date_range_str}", fontsize=11, pad=15, fontweight='bold')
+    ax.set_xlabel("Академические часы", labelpad=10)
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
+
+def get_time_distribution_stats(department=None, start_date=None, end_date=None):
+    """Считает общую статистику занятости пар по слотам."""
+    conn = sqlite3.connect(DB_FILE)
+    query = "SELECT lessons_text FROM schedule_history"
+    conditions = []
+    params = []
+    if department is not None:
+        conditions.append("department = ?")
+        params.append(department)
+    if start_date:
+        conditions.append("date >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("date <= ?")
+        params.append(end_date)
+        
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+        
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    
+    slot_counts = [0] * 10
+    for (lessons_json,) in rows:
+        try:
+            lessons = json.loads(lessons_json)
+        except Exception:
+            continue
+        for idx in range(min(len(lessons), 10)):
+            l_str = str(lessons[idx]).strip()
+            if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
+                continue
+            slot_counts[idx] += 1
+            
+    return slot_counts
+
+def generate_time_distribution_chart(department=None, start_date=None, end_date=None):
+    """Генерирует график распределения занятий по времени (номерам пар)."""
+    slot_counts = get_time_distribution_stats(department, start_date, end_date)
+    if sum(slot_counts) == 0:
+        return None
+        
+    apply_chart_style()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    slots = [f"{i+1} пара\n({CALLS[i][0]})" for i in range(len(slot_counts))]
+    counts = slot_counts
+    
+    bars = ax.bar(slots, counts, color='#b4befe', edgecolor='#1e1e2e', width=0.5)
+    
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, height + 0.1, f'{int(height)}', 
+                va='bottom', ha='center', color='#cdd6f4', fontweight='bold', fontsize=9)
+                
+    date_range_str = ""
+    if start_date and end_date:
+        if start_date == end_date:
+            date_range_str = f" за {start_date}"
+        else:
+            date_range_str = f" с {start_date} по {end_date}"
+            
+    dep_str = f" | Отделение {department}" if department is not None else ""
+    ax.set_title(f"Распределение занятий по времени (парам){date_range_str}{dep_str}\n(Загруженность расписания)", fontsize=11, pad=15, fontweight='bold')
+    ax.set_ylabel("Количество проведенных часов (слотов)", labelpad=10)
+    ax.set_ylim(0, max(counts) + max(counts)*0.15 if counts else 10)
+    ax.grid(axis='y', linestyle='--', alpha=0.3)
+    
+    plt.xticks(rotation=15)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
+
 
 # ====== МЕНЕДЖЕРЫ ======
 class MonitorManager:
@@ -1057,7 +1512,7 @@ def send_updates_for_day(day, data):
 
 # ====== КОМАНДЫ ======
 
-@bot.message_handler(commands=['r', 'db', 'time', 'unsub', 'start', 'about', 'help'])
+@bot.message_handler(commands=['r', 'db', 'time', 'unsub', 'start', 'about', 'help', 'stats'])
 def ad_and_execute(message):
     try:
         bot.send_message(message.chat.id, "Sub on @kalichoctu", message_thread_id=message.message_thread_id)
@@ -1071,6 +1526,7 @@ def ad_and_execute(message):
     elif cmd == 'start': cmd_start(message)
     elif cmd == 'about': cmd_about(message)
     elif cmd == 'help': cmd_help(message)
+    elif cmd == 'stats': cmd_stats(message)
 
 
 @bot.message_handler(commands=['cs'])
@@ -1769,7 +2225,7 @@ def cmd_cancel(message):
     bot.send_chat_action(message.chat.id, 'typing')
     cid = message.chat.id
     canceled = False
-    for d in (waiting_for_department, user_department, waiting_for_teacher_dept, waiting_for_teacher_rooms, waiting_for_sticker):
+    for d in (waiting_for_department, user_department, waiting_for_teacher_dept, waiting_for_teacher_rooms, waiting_for_sticker, waiting_for_stats_dates):
         if cid in d:
             del d[cid]
             canceled = True
@@ -1800,7 +2256,8 @@ def cmd_about(message):
         wrap_code("Языкиㅤ/langs:\nПоказывает все доступные языки для озвучки."),
         wrap_code("Голос. расписаниеㅤ/r_voice:\nОзвучивает сегодняшнее расписание."),
         wrap_code("Списокㅤ/list:\nВыводит перечень всех групп, за изменениями в которых следит данный чат."),
-        wrap_code("Отпискаㅤ/unsub:\nПолностью удаляет все активные подписки и прекращает автоматический мониторинг.")
+        wrap_code("Отпискаㅤ/unsub:\nПолностью удаляет все активные подписки и прекращает автоматический мониторинг."),
+        wrap_code("Статистикаㅤ/stats:\nПоказывает интерактивные графики и статистику занятий для групп, преподавателей и кабинетов с выбором периода дат.")
     ]
     reply_safe(message, about_text + "\n\n" + "\n\n".join(cmds))
 
@@ -1822,6 +2279,7 @@ def cmd_help(message):
         "/db [день|дата] — Расписание на день недели (пн, вт... сб) или дату (DD.MM.YYYY).\n"
         "/now — Текущее занятие и прогресс текущего блока.\n"
         "/next — Следующее занятие по расписанию.\n"
+        "/stats — Интерактивная статистика и графики нагрузки.\n"
         "\n"
         "*Время и статус*\n"
         "/time — Время до конца учебного дня и список звонков.\n"
@@ -2188,6 +2646,33 @@ def handle_all(message):
     text = message.text.strip() if message.text else ""
     chat_id = message.chat.id
 
+    # ====== Ожидание ввода дат для статистики ======
+    if chat_id in waiting_for_stats_dates:
+        if text.lower() in ('все', 'всё'):
+            if chat_id in stats_context:
+                stats_context[chat_id]['start_date'] = None
+                stats_context[chat_id]['end_date'] = None
+            del waiting_for_stats_dates[chat_id]
+            reply_safe(message, "✅ Период сброшен. Выбрано всё время.")
+            if chat_id in stats_context:
+                show_target_stats_menu_by_chat_id(chat_id, message.message_thread_id)
+            return
+            
+        start, end = parse_date_range(text)
+        if not start:
+            reply_safe(message, "❌ Неверный формат дат. Введите диапазон, например: `15.06.2026 - 19.06.2026` или одну дату `15.06.2026` (или напишите `все` / `/cancel`).")
+            return
+            
+        if chat_id in stats_context:
+            stats_context[chat_id]['start_date'] = start
+            stats_context[chat_id]['end_date'] = end
+            
+        del waiting_for_stats_dates[chat_id]
+        reply_safe(message, f"✅ Установлен период: с {start} по {end}")
+        if chat_id in stats_context:
+            show_target_stats_menu_by_chat_id(chat_id, message.message_thread_id)
+        return
+
     # ====== Регистрация учителя: выбор отделения ======
     if chat_id in waiting_for_teacher_dept:
         if text in ('1', '2', '3'):
@@ -2301,6 +2786,267 @@ def handle_all(message):
     if chat_id != LOG_GROUP_ID:
         try: bot.forward_message(LOG_GROUP_ID, chat_id, message.message_id)
         except: pass
+
+
+# ====== КОМАНДЫ СТАТИСТИКИ И ГРАФИКОВ ======
+
+def cmd_stats(message):
+    bot.send_chat_action(message.chat.id, 'typing')
+    text_args = message.text.replace('/stats', '', 1).strip()
+    
+    # Parse dates from text_args
+    start_date, end_date = parse_date_range(text_args)
+    clean_args = text_args
+    if start_date:
+        clean_args = re.sub(r'\d{2}\.\d{2}\.\d{4}', '', clean_args).strip()
+        clean_args = re.sub(r'[\s\-—]+$', '', clean_args).strip()
+        clean_args = re.sub(r'^[\s\-—]+', '', clean_args).strip()
+        
+    target_type = None  # 'group', 'teacher', 'room'
+    target_id = None
+    target_name = None
+    dept = None
+    
+    tokens = clean_args.split()
+    if tokens:
+        first = tokens[0].lower()
+        if first in ['учитель', 'teacher']:
+            name_query = " ".join(tokens[1:]).strip()
+            if not name_query:
+                return reply_safe(message, wrap_code("❌ Укажите имя преподавателя.\nПример: /stats учитель Hhh"))
+            
+            conn = sqlite3.connect(DB_FILE)
+            res = conn.execute("SELECT chat_id, name, department, rooms FROM teachers WHERE name LIKE ? AND status='approved'", (f"%{name_query}%",)).fetchall()
+            conn.close()
+            if not res:
+                return reply_safe(message, wrap_code(f"❌ Преподаватель '{name_query}' не найден или не одобрен."))
+            elif len(res) > 1:
+                match_list = "\n".join([f"- {r[1]} (отд.{r[2]})" for r in res])
+                return reply_safe(message, wrap_code(f"🔍 Найдено несколько преподавателей:\n{match_list}\nУточните запрос."))
+            
+            teacher_chat_id, target_name, dept, rooms_json = res[0]
+            target_id = json.loads(rooms_json)
+            target_type = 'teacher'
+        elif first in ['каб', 'room', 'кабинет']:
+            room_query = " ".join(tokens[1:]).strip()
+            if not room_query:
+                return reply_safe(message, wrap_code("❌ Укажите номер кабинета.\nПример: /stats каб 44"))
+            target_id = [room_query]
+            target_name = f"Кабинет {room_query}"
+            target_type = 'room'
+            mons = monitor_manager.get_user_monitors(message.chat.id)
+            dept = mons[0]['department'] if mons else 1
+        else:
+            group_query = clean_args.upper()
+            clean_query = group_query.replace('-', ' ').replace('_', ' ')
+            group_info = None
+            
+            for k, v in GROUP_NAME_TO_ID.items():
+                if clean_query == k.upper().replace('-', ' ') or group_query == k.upper():
+                    group_info = v
+                    target_name = k
+                    break
+            if not group_info:
+                for k, v in GROUP_NAME_TO_ID.items():
+                    if clean_query in k.upper().replace('-', ' ').split():
+                        group_info = v
+                        target_name = k
+                        break
+            
+            if group_info:
+                dept, target_id = group_info[0], group_info[1]
+                target_type = 'group'
+            else:
+                return reply_safe(message, wrap_code(f"❌ Группа или команда '{clean_args}' не распознана."))
+    else:
+        if is_teacher(message.chat.id):
+            dept, rooms = get_teacher_info(message.chat.id)
+            target_id = rooms
+            conn = sqlite3.connect(DB_FILE)
+            row = conn.execute("SELECT name FROM teachers WHERE chat_id=?", (message.chat.id,)).fetchone()
+            conn.close()
+            target_name = row[0] if row else "Моя нагрузка"
+            target_type = 'teacher'
+        else:
+            mons = monitor_manager.get_user_monitors(message.chat.id)
+            if mons:
+                dept, target_id = mons[0]['department'], mons[0]['group_id']
+                target_name = mons[0]['group_name']
+                target_type = 'group'
+            else:
+                return show_general_stats_menu(message)
+                
+    # Инициализируем контекст сессии для чата
+    stats_context[message.chat.id] = {
+        'target_type': target_type,
+        'target_id': target_id,
+        'target_name': target_name,
+        'dept': dept,
+        'start_date': start_date,
+        'end_date': end_date
+    }
+    
+    show_target_stats_menu_by_chat_id(message.chat.id, message.message_thread_id)
+
+def show_general_stats_menu(message):
+    title_msg = (
+        "📊 *Статистика*\n\n"
+        "Вы не подписаны ни на одну группу. Укажите цель для отчёта в аргументах или посмотрите общую загруженность пар.\n\n"
+        "*Примеры:* \n"
+        "• `/stats ИС-41-22` — статистика группы\n"
+        "• `/stats каб 44` — статистика кабинета\n"
+        "• `/stats учитель ФИО` — статистика преподавателя\n"
+        "• `/stats 15.06.2026-19.06.2026` — с фильтрацией дат\n\n"
+        "Показать общую статистику пар?"
+    )
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(
+        telebot.types.InlineKeyboardButton("🕒 Загруженность пар в колледже", callback_data="stats_general_time")
+    )
+    markup.add(
+        telebot.types.InlineKeyboardButton("❌ Закрыть", callback_data="stats_close")
+    )
+    bot.send_message(message.chat.id, title_msg, reply_markup=markup, parse_mode='Markdown', message_thread_id=message.message_thread_id)
+
+def show_target_stats_menu_by_chat_id(chat_id, message_thread_id=None):
+    ctx = stats_context.get(chat_id)
+    if not ctx:
+        return
+    
+    target_type = ctx['target_type']
+    target_name = ctx['target_name']
+    start_date = ctx['start_date']
+    end_date = ctx['end_date']
+    
+    period_str = "все время"
+    if start_date and end_date:
+        if start_date == end_date:
+            period_str = start_date
+        else:
+            period_str = f"{start_date} - {end_date}"
+            
+    title_msg = f"📊 Статистика: {target_name}\n📅 Период: {period_str}\n\nВыберите тип отчета:"
+    
+    markup = telebot.types.InlineKeyboardMarkup()
+    if target_type == 'group':
+        markup.add(
+            telebot.types.InlineKeyboardButton("📚 По предметам", callback_data="stats_view_subj"),
+            telebot.types.InlineKeyboardButton("📅 Нагрузка по дням", callback_data="stats_view_daily")
+        )
+    elif target_type in ('teacher', 'room'):
+        markup.add(
+            telebot.types.InlineKeyboardButton("📚 По предметам", callback_data="stats_view_subj"),
+            telebot.types.InlineKeyboardButton("📅 Нагрузка по дням", callback_data="stats_view_daily")
+        )
+        markup.add(
+            telebot.types.InlineKeyboardButton("👥 По группам", callback_data="stats_view_groups")
+        )
+        
+    markup.add(
+        telebot.types.InlineKeyboardButton("🕒 Загруженность пар", callback_data="stats_view_time")
+    )
+    markup.add(
+        telebot.types.InlineKeyboardButton("📅 Выбрать период", callback_data="stats_view_dates"),
+        telebot.types.InlineKeyboardButton("❌ Закрыть", callback_data="stats_close")
+    )
+    
+    bot.send_message(chat_id, title_msg, reply_markup=markup, message_thread_id=message_thread_id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('stats_'))
+def handle_stats_callbacks(call):
+    chat_id = call.message.chat.id
+    action = call.data
+    
+    if action == 'stats_close':
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+        except:
+            pass
+        if chat_id in stats_context:
+            del stats_context[chat_id]
+        if chat_id in waiting_for_stats_dates:
+            del waiting_for_stats_dates[chat_id]
+        bot.answer_callback_query(call.id)
+        return
+        
+    if action == 'stats_general_time':
+        bot.answer_callback_query(call.id, "Генерирую график...")
+        buf = generate_time_distribution_chart()
+        if buf:
+            bot.send_photo(chat_id, buf, caption="🕒 Общая загруженность учебных пар в колледже", message_thread_id=call.message.message_thread_id)
+        else:
+            bot.send_message(chat_id, wrap_code("❌ Нет данных для построения графика."))
+        return
+        
+    ctx = stats_context.get(chat_id)
+    if not ctx:
+        bot.answer_callback_query(call.id, "❌ Сессия истекла. Введите /stats заново.")
+        return
+        
+    target_type = ctx['target_type']
+    target_id = ctx['target_id']
+    target_name = ctx['target_name']
+    dept = ctx['dept']
+    start_date = ctx['start_date']
+    end_date = ctx['end_date']
+    
+    if action == 'stats_view_dates':
+        waiting_for_stats_dates[chat_id] = True
+        prompt = (
+            "📅 *Выбор периода*\n\n"
+            "Введите диапазон дат в формате `ДД.ММ.ГГГГ - ДД.ММ.ГГГГ` или одну дату `ДД.ММ.ГГГГ`:\n"
+            "Пример: `15.06.2026 - 19.06.2026`\n\n"
+            "Напишите `все`, чтобы сбросить фильтр дат.\n"
+            "Или напишите `/cancel` для отмены."
+        )
+        try:
+            bot.edit_message_text(prompt, chat_id, call.message.message_id, parse_mode='Markdown')
+        except:
+            reply_safe(call.message, prompt)
+        bot.answer_callback_query(call.id)
+        return
+        
+    bot.answer_callback_query(call.id, "Строю график...")
+    buf = None
+    caption_str = ""
+    
+    period_str = "за все время"
+    if start_date and end_date:
+        if start_date == end_date:
+            period_str = f"за {start_date}"
+        else:
+            period_str = f"с {start_date} по {end_date}"
+            
+    if action == 'stats_view_subj':
+        if target_type == 'group':
+            buf = generate_group_subject_chart(target_id, dept, target_name, start_date, end_date, chat_id)
+            caption_str = f"📚 Распределение учебных часов по предметам для группы {target_name} {period_str}"
+        elif target_type in ('teacher', 'room'):
+            buf = generate_teacher_subjects_chart(target_name, target_id, dept, start_date, end_date, chat_id)
+            caption_str = f"📚 Распределение учебных часов по предметам для {target_name} {period_str}"
+            
+    elif action == 'stats_view_daily':
+        if target_type == 'group':
+            buf = generate_group_daily_chart(target_id, dept, target_name, start_date, end_date)
+            caption_str = f"📅 Учебная нагрузка по дням для группы {target_name} {period_str}"
+        elif target_type in ('teacher', 'room'):
+            buf = generate_teacher_daily_chart(target_name, target_id, dept, start_date, end_date)
+            caption_str = f"📅 Учебная нагрузка по дням для {target_name} {period_str}"
+            
+    elif action == 'stats_view_groups':
+        if target_type in ('teacher', 'room'):
+            buf = generate_teacher_groups_chart(target_name, target_id, dept, start_date, end_date)
+            caption_str = f"👥 Распределение часов по группам для {target_name} {period_str}"
+            
+    elif action == 'stats_view_time':
+        buf = generate_time_distribution_chart(dept, start_date, end_date)
+        caption_str = f"🕒 Распределение занятий по парам {period_str} (отд. {dept})"
+        
+    if buf:
+        bot.send_photo(chat_id, buf, caption=caption_str, message_thread_id=call.message.message_thread_id)
+    else:
+        reply_safe(call.message, wrap_code(f"❌ Нет данных для графика за указанный период ({period_str})."))
+
 
 if __name__ == '__main__':
     load_groups_cache()
