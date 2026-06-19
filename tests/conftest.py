@@ -4,6 +4,8 @@ import os
 import tempfile
 from unittest.mock import MagicMock, patch
 
+os.environ['BOT_TOKEN'] = '123456:dummy_token_for_tests'
+
 @pytest.fixture(autouse=True)
 def mock_telebot(monkeypatch):
     mock_bot = MagicMock()
@@ -12,9 +14,12 @@ def mock_telebot(monkeypatch):
 
 @pytest.fixture
 def memory_db(monkeypatch):
-    import kalich
     temp_db = tempfile.NamedTemporaryFile(delete=False)
     temp_db.close()
+    
+    os.environ['DB_FILE'] = temp_db.name
+    
+    import kalich
     
     # Patch kalich.DB_FILE for this test
     monkeypatch.setattr('kalich.DB_FILE', temp_db.name)
