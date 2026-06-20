@@ -59,6 +59,9 @@ venv.bak/
 
 # Local databases and JSON caches
 data/
+schedules.db
+active_monitors.json
+groups_cache.json
 
 # Local debug/test scripts
 debug_override.py

@@ -1,0 +1,22 @@
+{
+  "short_name": "KalichBot",
+  "name": "Kalich Bot - Расписание и Замены",
+  "description": "Telegram PWA для удобного отслеживания расписания, поиска аудиторий и управления заменами.",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/?utm_source=pwa",
+  "background_color": "#1e1e2e",
+  "theme_color": "#cba6f7",
+  "display": "standalone",
+  "orientation": "portrait"
+}

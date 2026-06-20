@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Kalich Bot PWA</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="manifest" href="/manifest.json">
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Telegram Web App SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body class="loading">
+  <!-- Loader Screen -->
+  <div id="loader" class="loader-overlay">
+    <div class="loader-spinner"></div>
+    <p>Загрузка Калич-Помощника...</p>
+  </div>
+
+  <!-- Main Container -->
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-user-info">
+        <span class="user-avatar">🦊</span>
+        <div class="user-text">
+          <h1 id="user-name">Гость</h1>
+          <span id="user-role" class="role-badge">Студент</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <span id="connection-status" class="status-indicator online">Онлайн</span>
+      </div>
+    </header>
+
+    <!-- Offline Queue Banner -->
+    <div id="sync-banner" class="sync-banner hidden">
+      <span class="sync-icon">🔄</span>
+      <span id="sync-message">Есть неотправленные изменения. Сохранено локально.</span>
+      <button id="btn-sync-retry" class="btn-mini">Синхронизировать</button>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="app-content">
+      
+      <!-- TAB 1: SCHEDULE -->
+      <section id="tab-schedule" class="tab-view active">
+        <!-- Filter Controls -->
+        <div class="filter-panel card">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="select-dept">Отделение</label>
+              <select id="select-dept">
+                <option value="1">Отделение 1</option>
+                <option value="2">Отделение 2</option>
+                <option value="3" selected>Отделение 3</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="select-group">Группа</label>
+              <select id="select-group">
+                <option value="">Выберите группу...</option>
+                <option value="all">Все группы отделения</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="input-schedule-date">Поиск по дате</label>
+              <input type="date" id="input-schedule-date">
+            </div>
+          </div>
+          
+          <!-- Day of Week selector -->
+          <div class="day-selector">
+            <button class="day-btn" data-day="1">Пн</button>
+            <button class="day-btn" data-day="2">Вт</button>
+            <button class="day-btn" data-day="3">Ср</button>
+            <button class="day-btn" data-day="4">Чт</button>
+            <button class="day-btn" data-day="5">Пт</button>
+            <button class="day-btn" data-day="6">Сб</button>
+            <button class="day-btn" data-day="all">Вся неделя</button>
+          </div>
+        </div>
+
+        <!-- Schedule Output List -->
+        <div class="schedule-section">
+          <div class="section-title">
+            <h2 id="schedule-title">Расписание</h2>
+            <button id="btn-save-default" class="btn-icon" title="Сохранить как мою группу">⭐</button>
+          </div>
+          <div id="schedule-list" class="schedule-list">
+            <div class="empty-state">
+              <span class="empty-icon">📅</span>
+              <p>Выберите группу для просмотра расписания</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: TEACHER CONTROL PANEL -->
+      <section id="tab-teacher" class="tab-view">
+        <div class="teacher-welcome-card card gradient-border">
+          <h2 id="teacher-info-title">Панель преподавателя</h2>
+          <p id="teacher-rooms-info">Кабинеты не привязаны</p>
+          <div class="day-selector teacher-day-selector">
+            <button class="t-day-btn" data-day="1">Пн</button>
+            <button class="t-day-btn" data-day="2">Вт</button>
+            <button class="t-day-btn" data-day="3">Ср</button>
+            <button class="t-day-btn" data-day="4">Чт</button>
+            <button class="t-day-btn" data-day="5">Пт</button>
+            <button class="t-day-btn" data-day="6">Сб</button>
+          </div>
+        </div>
+
+        <div class="teacher-schedule-section">
+          <h3>Мое расписание на день</h3>
+          <div id="teacher-schedule-list" class="schedule-list">
+            <div class="empty-state">Загрузка расписания...</div>
+          </div>
+        </div>
+
+        <!-- Override Editor Modal / Overlay (Inline styled but managed by CSS) -->
+        <div id="override-modal" class="modal hidden">
+          <div class="modal-content card">
+            <div class="modal-header">
+              <h3>Изменение занятия</h3>
+              <button id="btn-close-modal" class="btn-close">&times;</button>
+            </div>
+            <form id="override-form" class="modal-body">
+              <p id="override-label-detail" class="text-secondary">Урок 1 (08:20 - 10:00)</p>
+              <input type="hidden" id="override-slot" value="">
+              <input type="hidden" id="override-day" value="">
+              
+              <div class="form-group">
+                <label for="override-group">Группа</label>
+                <select id="override-group" required>
+                  <option value="-1">Для всех групп (Общее)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="override-subject">Новый предмет</label>
+                <input type="text" id="override-subject" placeholder="Напр. Математика (оставьте пустым без изменений)">
+              </div>
+
+              <div class="form-group">
+                <label for="override-room">Новый кабинет</label>
+                <input type="text" id="override-room" placeholder="Напр. 302 (оставьте пустым без изменений)">
+              </div>
+
+              <div class="form-actions">
+                <button type="button" id="btn-delete-override" class="btn btn-danger">Сбросить замену</button>
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: ANALYTICS -->
+      <section id="tab-analytics" class="tab-view">
+        <div class="analytics-filter card">
+          <h3>Аналитика загруженности</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="stats-type">Тип анализа</label>
+              <select id="stats-type">
+                <option value="group">Учебная группа</option>
+                <option value="teacher">Кабинет</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="stats-target" id="label-stats-target">Объект</label>
+              <select id="stats-target">
+                <!-- Populated dynamically based on stats-type -->
+              </select>
+              <input type="text" id="stats-target-input" class="hidden" placeholder="Номер кабинета, напр. 302">
+            </div>
+          </div>
+        </div>
+
+        <div class="charts-container">
+          <!-- Chart 1 -->
+          <div class="chart-card card">
+            <h4>Распределение по предметам (пары)</h4>
+            <div id="chart-subjects" class="chart-canvas-container">
+              <!-- Inline SVG charts drawn by JS -->
+              <svg id="svg-subjects" class="svg-chart" viewBox="0 0 400 300"></svg>
+            </div>
+          </div>
+
+          <!-- Chart 2 -->
+          <div class="chart-card card">
+            <h4>Учебная нагрузка по дням (часы)</h4>
+            <div id="chart-daily" class="chart-canvas-container">
+              <svg id="svg-daily" class="svg-chart" viewBox="0 0 400 250"></svg>
+            </div>
+          </div>
+
+          <!-- Chart 3 -->
+          <div id="chart-groups-card" class="chart-card card hidden">
+            <h4>Распределение по группам (часы)</h4>
+            <div id="chart-groups" class="chart-canvas-container">
+              <svg id="svg-groups" class="svg-chart" viewBox="0 0 400 300"></svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: SETTINGS -->
+      <section id="tab-settings" class="tab-view">
+        <div class="settings-card card">
+          <h3>Мой профиль 👤</h3>
+          <p style="margin: 4px 0;"><strong>Пользователь:</strong> <span id="settings-user-name">Гость</span></p>
+          <p style="margin: 4px 0;"><strong>Роль:</strong> <span id="settings-user-role">Студент</span></p>
+          <p id="settings-dept-row" style="margin: 4px 0;" class="hidden"><strong>Отделение:</strong> <span id="settings-user-dept">-</span></p>
+          <p id="settings-group-row" style="margin: 4px 0;" class="hidden"><strong>Моя группа:</strong> <span id="settings-default-group">Не выбрана</span></p>
+        </div>
+
+        <div class="settings-card card" style="margin-top: 15px;">
+          <h3>Уведомления и оповещения</h3>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <h4>Авто-уведомления</h4>
+              <p>Уведомлять в боте при изменении расписания</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-notifications" checked>
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <h4>Голосовые оповещения</h4>
+              <p>Присылать голосовые файлы с заменами</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-voice">
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="form-group" style="margin-top: 15px;">
+            <label for="setting-voice-effect">Эффект голосовых</label>
+            <select id="setting-voice-effect">
+              <option value="echo">Эхо</option>
+              <option value="robot">Робот</option>
+              <option value="slow">Замедленный</option>
+              <option value="normal">Обычный</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-card card" style="margin-top: 15px;">
+          <h3>Дополнительно</h3>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <h4>Fluffy Mode 🦊</h4>
+              <p>Милое лисье оформление и стикеры в чате</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setting-fluffy">
+              <span class="slider round"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="info-footer">
+          <p>Разработано для Kalich-Reborn</p>
+          <p class="version">Версия PWA 1.0.0 (Offline-first)</p>
+        </div>
+      </section>
+
+      <!-- TAB 5: MODERATOR DATA CONTROL PANEL -->
+      <section id="tab-moderator" class="tab-view">
+        <div class="card gradient-border">
+          <h2>Панель контроля данных 🛡️</h2>
+          <p>Администрирование кэша и замен преподавателей</p>
+        </div>
+
+        <div class="card">
+          <h3>Управление кэшем</h3>
+          <div class="form-row" style="margin-top: 10px;">
+            <div class="form-group">
+              <label for="admin-dept">Отделение</label>
+              <select id="admin-dept">
+                <option value="all" selected>Все отделения</option>
+                <option value="1">Отделение 1</option>
+                <option value="2">Отделение 2</option>
+                <option value="3">Отделение 3</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row" style="margin-top: 10px;">
+            <div class="form-group">
+              <label for="admin-date-start">С даты</label>
+              <input type="date" id="admin-date-start">
+            </div>
+            <div class="form-group">
+              <label for="admin-date-end">По дату</label>
+              <input type="date" id="admin-date-end">
+            </div>
+          </div>
+          <div class="form-actions" style="justify-content: flex-start; gap: 8px; margin-top: 10px;">
+            <button id="btn-admin-week-current" class="btn-mini">Текущая неделя</button>
+            <button id="btn-admin-week-next" class="btn-mini">Следующая неделя</button>
+          </div>
+          <div class="form-actions" style="justify-content: flex-start; gap: 12px; margin-top: 15px;">
+            <button id="btn-admin-fill" class="btn btn-primary">Заполнить кэш</button>
+            <button id="btn-admin-flush" class="btn btn-danger">Очистить кэш</button>
+          </div>
+          <p class="text-secondary" style="font-size: 11px; margin-top: 8px;">
+            * Заполнение кэша загружает расписания всех групп за выбранный период с сайта в фоновом режиме.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>Активные замены в базе</h3>
+          <div id="admin-overrides-list" class="schedule-list" style="margin-top: 12px;">
+            <div class="empty-state">Нет активных замен в базе данных</div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav class="app-nav">
+      <button class="nav-item active" data-tab="tab-schedule">
+        <span class="nav-icon">📅</span>
+        <span class="nav-label">Расписание</span>
+      </button>
+      <button id="nav-teacher-tab" class="nav-item hidden" data-tab="tab-teacher">
+        <span class="nav-icon">👨‍🏫</span>
+        <span class="nav-label">Замены</span>
+      </button>
+      <button id="nav-moderator-tab" class="nav-item hidden" data-tab="tab-moderator">
+        <span class="nav-icon">🛡️</span>
+        <span class="nav-label">Контроль</span>
+      </button>
+      <button class="nav-item" data-tab="tab-analytics">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Аналитика</span>
+      </button>
+      <button class="nav-item" data-tab="tab-settings">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">Настройки</span>
+      </button>
+    </nav>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

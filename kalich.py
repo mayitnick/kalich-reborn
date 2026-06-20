@@ -216,6 +216,7 @@ def background_group_updater():
 
 
 def init_db():
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
     # Таблица для стикеров
     conn.execute(
@@ -253,7 +254,6 @@ def init_db():
     conn.execute('''CREATE TABLE IF NOT EXISTS teachers
                     (chat_id INTEGER PRIMARY KEY, department INTEGER, rooms TEXT,
                      name TEXT, status TEXT DEFAULT 'pending')''')
-    # Замены кабинетов/предметов учителями
     conn.execute('''CREATE TABLE IF NOT EXISTS teacher_room_overrides
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
                      teacher_chat_id INTEGER,
@@ -264,7 +264,8 @@ def init_db():
                      new_room TEXT,
                      new_subject TEXT,
                      notified INTEGER DEFAULT 0,
-                     notify_after REAL)''')
+                     notify_after REAL,
+                     date TEXT)''')
     # Пользовательские настройки (для /settings)
     conn.execute('''CREATE TABLE IF NOT EXISTS user_settings
                     (chat_id INTEGER PRIMARY KEY, notifications INTEGER DEFAULT 1, voice_alerts INTEGER DEFAULT 0)''')
@@ -276,6 +277,11 @@ def init_db():
     try:
         conn.execute(
             "ALTER TABLE user_settings ADD COLUMN voice_effect TEXT DEFAULT 'echo'")
+    except BaseException:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE teacher_room_overrides ADD COLUMN date TEXT")
     except BaseException:
         pass
     conn.commit()
@@ -1314,13 +1320,19 @@ def cmd_teacher_next(message):
 # ====== ЗАМЕНЫ УЧИТЕЛЯ (OVERRIDES) ======
 
 
-def apply_teacher_overrides(all_data, day):
+def apply_teacher_overrides(all_data, day, date_str=None):
     """Применяет замены учителя (кабинет/предмет) к данным расписания поверх сайта."""
     conn = sqlite3.connect(DB_FILE)
-    rows = conn.execute(
-        "SELECT slot_idx, group_id, department, new_room, new_subject FROM teacher_room_overrides WHERE day=?",
-        (day,)
-    ).fetchall()
+    if date_str:
+        rows = conn.execute(
+            "SELECT slot_idx, group_id, department, new_room, new_subject FROM teacher_room_overrides WHERE day=? AND (date IS NULL OR date='' OR date=?)",
+            (day, date_str)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT slot_idx, group_id, department, new_room, new_subject FROM teacher_room_overrides WHERE day=? AND (date IS NULL OR date='')",
+            (day,)
+        ).fetchall()
     conn.close()
     if not rows:
         return all_data
@@ -1357,24 +1369,37 @@ def apply_teacher_overrides(all_data, day):
 
 
 def save_teacher_override(teacher_chat_id, department,
-                          day, slot_idx, group_id, new_room, new_subject):
+                          day, slot_idx, group_id, new_room, new_subject, date_str=None):
     """Сохраняет или обновляет замену учителя. Сбрасывает notify_after на now+5min."""
     notify_after = time.time() + 300  # 5 минут
     conn = sqlite3.connect(DB_FILE)
-    existing = conn.execute(
-        "SELECT id FROM teacher_room_overrides WHERE teacher_chat_id=? AND day=? AND slot_idx=? AND group_id=? AND notified=0",
-        (teacher_chat_id, day, slot_idx, group_id)
-    ).fetchone()
+    if date_str:
+        existing = conn.execute(
+            "SELECT id FROM teacher_room_overrides WHERE teacher_chat_id=? AND day=? AND slot_idx=? AND group_id=? AND date=? AND notified=0",
+            (teacher_chat_id, day, slot_idx, group_id, date_str)
+        ).fetchone()
+    else:
+        existing = conn.execute(
+            "SELECT id FROM teacher_room_overrides WHERE teacher_chat_id=? AND day=? AND slot_idx=? AND group_id=? AND (date IS NULL OR date='') AND notified=0",
+            (teacher_chat_id, day, slot_idx, group_id)
+        ).fetchone()
+        
     if existing:
-        conn.execute(
-            "UPDATE teacher_room_overrides SET new_room=?, new_subject=?, department=?, notify_after=? WHERE id=?",
-            (new_room, new_subject, department, notify_after, existing[0])
-        )
+        if date_str:
+            conn.execute(
+                "UPDATE teacher_room_overrides SET new_room=?, new_subject=?, department=?, notify_after=?, date=? WHERE id=?",
+                (new_room, new_subject, department, notify_after, date_str, existing[0])
+            )
+        else:
+            conn.execute(
+                "UPDATE teacher_room_overrides SET new_room=?, new_subject=?, department=?, notify_after=? WHERE id=?",
+                (new_room, new_subject, department, notify_after, existing[0])
+            )
     else:
         conn.execute(
-            "INSERT INTO teacher_room_overrides (teacher_chat_id, department, day, slot_idx, group_id, new_room, new_subject, notified, notify_after) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            "INSERT INTO teacher_room_overrides (teacher_chat_id, department, day, slot_idx, group_id, new_room, new_subject, notified, notify_after, date) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
             (teacher_chat_id, department, day, slot_idx,
-             group_id, new_room, new_subject, notify_after)
+             group_id, new_room, new_subject, notify_after, date_str)
         )
     conn.commit()
     conn.close()
@@ -3776,6 +3801,10 @@ if __name__ == '__main__':
     threading.Thread(target=background_group_updater, daemon=True).start()
     threading.Thread(target=check_loop, daemon=True).start()
     threading.Thread(target=morning_broadcast, daemon=True).start()
+    
+    # Start PWA/API Web Server
+    import api_server
+    threading.Thread(target=api_server.start_server, daemon=True).start()
     
     init_time = time.perf_counter() - _kalich_start_time
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Инициализация кода и баз данных завершена за {init_time:.3f} сек.")
