@@ -15,6 +15,39 @@
   --shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
   --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --radius: 14px;
+  
+  --inverse-text: #11111b;
+  --toggle-bg: #313244;
+  --toggle-circle: #cdd6f4;
+  --toggle-circle-checked: #11111b;
+  
+  --success-bg: rgba(166, 227, 161, 0.15);
+  --danger-bg: rgba(243, 139, 168, 0.15);
+  --role-bg: rgba(203, 166, 247, 0.15);
+}
+
+body.fluffy-mode {
+  --bg-color: #ffe6d5;
+  --header-bg: #ffc299;
+  --card-bg: #fff5eb;
+  --text-color: #4a2c11;
+  --text-secondary: #8c5a2b;
+  --accent-color: #ff7f2a;
+  --accent-hover: #ff9955;
+  --primary: #e65c00;
+  --border-color: #ffb380;
+  
+  --inverse-text: #ffffff;
+  --toggle-bg: #ffc299;
+  --toggle-circle: #4a2c11;
+  --toggle-circle-checked: #ffffff;
+  
+  --success: #228b22;
+  --danger: #d32f2f;
+  
+  --success-bg: rgba(34, 139, 34, 0.15);
+  --danger-bg: rgba(211, 47, 47, 0.15);
+  --role-bg: rgba(255, 127, 42, 0.15);
 }
 
 * {
@@ -23,6 +56,11 @@
   padding: 0;
   -webkit-tap-highlight-color: transparent;
   font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+select option {
+  background-color: var(--header-bg);
+  color: var(--text-color);
 }
 
 body {
@@ -44,7 +82,7 @@ body {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background-color: #11111b;
+  background-color: var(--header-bg);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -61,7 +99,7 @@ body.ready .loader-overlay {
 .loader-spinner {
   width: 60px;
   height: 60px;
-  border: 5px solid #313244;
+  border: 5px solid var(--border-color);
   border-top: 5px solid var(--accent-color);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -116,7 +154,7 @@ body.ready .loader-overlay {
 }
 
 .role-badge {
-  background-color: rgba(203, 166, 247, 0.15);
+  background-color: var(--role-bg);
   color: var(--accent-color);
   padding: 2px 6px;
   border-radius: 6px;
@@ -141,13 +179,13 @@ body.ready .loader-overlay {
 }
 
 .status-indicator.online {
-  background-color: rgba(166, 227, 161, 0.15);
+  background-color: var(--success-bg);
   color: var(--success);
 }
 .status-indicator.online::before { background-color: var(--success); }
 
 .status-indicator.offline {
-  background-color: rgba(243, 139, 168, 0.15);
+  background-color: var(--danger-bg);
   color: var(--danger);
 }
 .status-indicator.offline::before { background-color: var(--danger); }
@@ -155,7 +193,7 @@ body.ready .loader-overlay {
 /* Offline Sync Banner */
 .sync-banner {
   background-color: var(--warning);
-  color: #11111b;
+  color: var(--inverse-text);
   padding: 8px 16px;
   font-size: 13px;
   display: flex;
@@ -175,8 +213,8 @@ body.ready .loader-overlay {
 }
 
 .btn-mini {
-  background-color: #11111b;
-  color: #cdd6f4;
+  background-color: var(--header-bg);
+  color: var(--text-color);
   border: none;
   padding: 4px 8px;
   border-radius: 6px;
@@ -253,7 +291,7 @@ body.ready .loader-overlay {
 }
 
 select, input[type="text"], input[type="date"] {
-  background-color: #11111b;
+  background-color: var(--header-bg);
   border: 1px solid var(--border-color);
   color: var(--text-color);
   padding: 10px 14px;
@@ -283,7 +321,7 @@ select:focus, input[type="text"]:focus, input[type="date"]:focus {
 
 .btn-primary {
   background-color: var(--accent-color);
-  color: #11111b;
+  color: var(--inverse-text);
 }
 
 .btn-primary:active {
@@ -317,7 +355,7 @@ select:focus, input[type="text"]:focus, input[type="date"]:focus {
 }
 
 .day-btn, .t-day-btn {
-  background-color: #11111b;
+  background-color: var(--header-bg);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
   padding: 8px 0;
@@ -331,7 +369,7 @@ select:focus, input[type="text"]:focus, input[type="date"]:focus {
 
 .day-btn.active, .t-day-btn.active {
   background-color: var(--accent-color);
-  color: #11111b;
+  color: var(--inverse-text);
   border-color: var(--accent-color);
 }
 
@@ -543,7 +581,7 @@ select:focus, input[type="text"]:focus, input[type="date"]:focus {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: #313244;
+  background-color: var(--toggle-bg);
   transition: .3s;
 }
 
@@ -554,7 +592,7 @@ select:focus, input[type="text"]:focus, input[type="date"]:focus {
   width: 16px;
   left: 4px;
   bottom: 4px;
-  background-color: #cdd6f4;
+  background-color: var(--toggle-circle);
   transition: .3s;
 }
 
@@ -564,7 +602,7 @@ input:checked + .slider {
 
 input:checked + .slider:before {
   transform: translateX(20px);
-  background-color: #11111b;
+  background-color: var(--toggle-circle-checked);
 }
 
 .slider.round {
@@ -755,4 +793,65 @@ input:checked + .slider:before {
   0% { box-shadow: inset 0 0 4px rgba(203, 166, 247, 0.1); }
   50% { box-shadow: inset 0 0 10px rgba(203, 166, 247, 0.3); }
   100% { box-shadow: inset 0 0 4px rgba(203, 166, 247, 0.1); }
+}
+
+/* Setup Screen */
+.setup-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  background: var(--bg-color);
+  animation: fadeIn 0.3s ease;
+}
+
+.setup-card {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.setup-header {
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+.setup-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
+}
+
+.setup-header h2 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-color);
+}
+
+.setup-header p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.install-banner {
+  background: rgba(203, 166, 247, 0.15);
+  border: 1px solid rgba(203, 166, 247, 0.3);
+  padding: 12px;
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  text-align: center;
+}
+
+.install-banner p {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-color);
 }

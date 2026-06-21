@@ -1,9 +1,16 @@
-// Initialize Telegram WebApp SDK
-const tg = window.Telegram?.WebApp;
-if (tg) {
-  tg.ready();
-  tg.expand();
+// ID Generator for local profile (compat with Telegram chat_id)
+function generateUUID() {
+  return Math.floor(Math.random() * 2147483647);
 }
+
+// PWA Install State
+let deferredPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (el.installBanner) el.installBanner.classList.remove('hidden');
+});
 
 // State management
 let state = {
@@ -53,6 +60,22 @@ const el = {
   syncBanner: document.getElementById('sync-banner'),
   syncMessage: document.getElementById('sync-message'),
   btnSyncRetry: document.getElementById('btn-sync-retry'),
+  
+  // Setup View Elements
+  viewSetup: document.getElementById('view-setup'),
+  viewMain: document.getElementById('view-main'),
+  setupForm: document.getElementById('setup-form'),
+  setupRole: document.getElementById('setup-role'),
+  setupName: document.getElementById('setup-name'),
+  setupStudentFields: document.getElementById('setup-student-fields'),
+  setupTeacherFields: document.getElementById('setup-teacher-fields'),
+  setupDept: document.getElementById('setup-dept'),
+  setupGroup: document.getElementById('setup-group'),
+  setupTeacherDept: document.getElementById('setup-teacher-dept'),
+  setupRooms: document.getElementById('setup-rooms'),
+  setupPassword: document.getElementById('setup-password'),
+  installBanner: document.getElementById('install-banner'),
+  btnInstallPwa: document.getElementById('btn-install-pwa'),
   
   selectDept: document.getElementById('select-dept'),
   selectGroup: document.getElementById('select-group'),
@@ -119,33 +142,166 @@ const el = {
 
 // =================== INIT & AUTHENTICATION ===================
 async function initApp() {
+  // PWA Standalone Enforcement
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const urlParams = new URLSearchParams(window.location.search);
+  const isBypass = urlParams.get('dev') === '1';
+
+  if (!isStandalone && !isBypass) {
+    document.getElementById('loader').classList.add('hidden');
+    document.getElementById('pwa-blocker').classList.remove('hidden');
+    
+    // Listen for beforeinstallprompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      const btn = document.getElementById('btn-pwa-blocker-install');
+      btn.classList.remove('hidden');
+      document.getElementById('pwa-blocker-hint').classList.add('hidden');
+      
+      btn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+          deferredPrompt.prompt();
+          const { outcome } = await deferredPrompt.userChoice;
+          if (outcome === 'accepted') {
+            console.log('User accepted the install prompt');
+          }
+          deferredPrompt = null;
+          btn.classList.add('hidden');
+        }
+      });
+    });
+    
+    return; // STOP EXECUTION!
+  }
+
   setupEventListeners();
   loadLocalCache();
   
-  // Update connection status
-  updateOnlineStatus();
-
-  // Attempt Authentication with WebApp initData
-  const initData = tg?.initData || "";
+  // Attempt to sync auth status
   try {
-    const authResponse = await fetchAPI('/api/auth', {
-      method: 'POST',
-      body: JSON.stringify({ initData })
-    });
-    
-    if (authResponse && !authResponse.error) {
-      state.user = authResponse.user;
-      localStorage.setItem('kalich_profile', JSON.stringify(state.user));
+    if (state.user && state.user.id) {
+      const authResponse = await fetchAPI('/api/auth', {
+        method: 'POST',
+        body: JSON.stringify({ device_id: state.user.id })
+      });
+      
+      if (authResponse && !authResponse.error && authResponse.user) {
+        // If backend says we are an approved teacher, update the role
+        if (authResponse.user.role === 'teacher' && state.user.role !== 'teacher') {
+          state.user.role = 'teacher';
+          state.user.department = authResponse.user.department;
+          state.user.rooms = authResponse.user.rooms;
+          localStorage.setItem('kalich_profile', JSON.stringify(state.user));
+          alert("Ваша заявка на преподавателя была одобрена!");
+        } else if (authResponse.user.role === 'moderator') {
+          state.user.role = 'moderator';
+          localStorage.setItem('kalich_profile', JSON.stringify(state.user));
+        }
+      }
     }
   } catch (e) {
-    console.warn("Auth failed, using cached profile", e);
+    console.warn("Auth check failed", e);
   }
 
+  // Check Profile
+  const cachedProfile = localStorage.getItem('kalich_profile');
+  if (cachedProfile) {
+    state.user = JSON.parse(cachedProfile);
+    
+    // Legacy profile cleanup (if they have old dev ID or missing ID)
+    if (state.user.id === 1234567 || state.user.id === 0 || !state.user.id || typeof state.user.id === 'string') {
+      console.log("Found legacy profile, resetting...");
+      localStorage.removeItem('kalich_profile');
+      state.user = { id: 0, name: 'Гость', role: 'student', department: 3, group_id: null, rooms: [] };
+      
+      el.viewMain.classList.add('hidden');
+      el.viewSetup.classList.remove('hidden');
+      await loadGroups();
+      populateSetupGroups();
+      document.body.classList.remove('loading');
+      document.body.classList.add('ready');
+      return;
+    }
+
+    el.viewSetup.classList.add('hidden');
+    el.viewMain.classList.remove('hidden');
+    
+    // Fetch groups
+    await loadGroups();
+    
+    startMainApp();
+  } else {
+    // Show Setup Flow
+    el.viewMain.classList.add('hidden');
+    el.viewSetup.classList.remove('hidden');
+    
+    // Fetch groups for setup dropdown
+    await loadGroups();
+    populateSetupGroups();
+    
+    // Hide loader
+    document.body.classList.remove('loading');
+    document.body.classList.add('ready');
+  }
+}
+
+function populateSetupGroups() {
+  const dep = parseInt(el.setupDept.value);
+  el.setupGroup.innerHTML = '<option value="">Выберите группу...</option>';
+  
+  const filtered = [];
+  for (const [name, info] of Object.entries(state.groups)) {
+    if (info[0] === dep) filtered.push({ name, gid: info[1] });
+  }
+  filtered.sort((a, b) => a.name.localeCompare(b.name));
+  
+  filtered.forEach(g => {
+    const opt = document.createElement('option');
+    opt.value = g.gid;
+    opt.textContent = g.name;
+    el.setupGroup.appendChild(opt);
+  });
+}
+
+// =================== MAIN APP START ===================
+
+// Settings UI and Application logic
+function applySettings() {
+  const s = state.user.settings || {};
+  
+  // 1. Populate UI if elements exist
+  if (el.settingNotifications) el.settingNotifications.checked = !!s.notifications;
+  if (el.settingVoice) el.settingVoice.checked = !!s.voice_alerts;
+  if (el.settingVoiceEffect) el.settingVoiceEffect.value = s.voice_effect || 'normal';
+  if (el.settingFluffy) el.settingFluffy.checked = !!s.fluffy_mode;
+
+  // 2. Apply theme (Fluffy Mode)
+  if (s.fluffy_mode) {
+    document.body.classList.add('fluffy-mode');
+  } else {
+    document.body.classList.remove('fluffy-mode');
+  }
+
+  // 3. Toggle voice button visibility
+  const voiceBtn = document.getElementById('btn-read-schedule');
+  if (voiceBtn) {
+    if (s.voice_alerts) voiceBtn.classList.remove('hidden');
+    else voiceBtn.classList.add('hidden');
+  }
+
+  // 4. Request Notification permissions if turned on
+  if (s.notifications && 'Notification' in window) {
+    if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      Notification.requestPermission();
+    }
+  }
+}
+
+async function startMainApp() {
   // Update profile views
   updateProfileUI();
-
-  // Fetch groups
-  await loadGroups();
+  applySettings();
 
   // Load default group if saved
   const savedGroup = localStorage.getItem('kalich_default_group');
@@ -656,15 +812,7 @@ function queueOverride(override) {
   updateSyncBanner();
   
   // Inform user
-  if (tg) {
-    tg.showPopup({
-      title: 'Оффлайн-режим',
-      message: 'Замена сохранена на устройстве. Мы синхронизируем ее сразу после восстановления сети.',
-      buttons: [{type: 'ok'}]
-    });
-  } else {
-    alert('Замена сохранена локально (нет интернета).');
-  }
+  alert('Оффлайн-режим: Замена сохранена на устройстве. Мы синхронизируем ее сразу после восстановления сети.');
 }
 
 async function processOfflineQueue() {
@@ -677,7 +825,7 @@ async function processOfflineQueue() {
     const result = await fetchAPI('/api/sync', {
       method: 'POST',
       body: JSON.stringify({
-        initData: tg?.initData || "",
+        device_id: state.user.id,
         overrides: state.offlineQueue
       })
     });
@@ -690,11 +838,7 @@ async function processOfflineQueue() {
       // Reload teacher schedule
       loadTeacherSchedule();
       
-      if (tg) {
-        tg.showAlert('Все оффлайн-изменения успешно синхронизированы!');
-      } else {
-        alert('Локальные изменения успешно отправлены на сервер!');
-      }
+      alert('Все оффлайн-изменения успешно синхронизированы!');
     }
   } catch (e) {
     console.error("Sync failed", e);
@@ -1020,6 +1164,110 @@ function drawDailyLoadChart(daily) {
 
 // =================== EVENT LISTENERS ===================
 function setupEventListeners() {
+  // PWA Install Button
+  if (el.btnInstallPwa) {
+    el.btnInstallPwa.addEventListener('click', async () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          el.installBanner.classList.add('hidden');
+        }
+        deferredPrompt = null;
+      }
+    });
+  }
+
+  // Setup Form Listeners
+  if (el.setupRole) {
+    el.setupRole.addEventListener('change', (e) => {
+      const role = e.target.value;
+      if (role === 'student') {
+        el.setupStudentFields.classList.remove('hidden');
+        el.setupTeacherFields.classList.add('hidden');
+      } else {
+        el.setupStudentFields.classList.add('hidden');
+        el.setupTeacherFields.classList.remove('hidden');
+      }
+    });
+  }
+
+  if (el.setupDept) {
+    el.setupDept.addEventListener('change', populateSetupGroups);
+  }
+
+  if (el.setupForm) {
+    el.setupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const role = el.setupRole.value;
+      const name = el.setupName.value.trim();
+      let dept = 3;
+      let groupId = null;
+      let rooms = [];
+      
+      if (role === 'student') {
+        dept = parseInt(el.setupDept.value);
+        groupId = parseInt(el.setupGroup.value);
+        if (!groupId) {
+          alert('Пожалуйста, выберите группу');
+          return;
+        }
+        localStorage.setItem('kalich_default_group', JSON.stringify([dept, groupId]));
+      } else {
+        dept = parseInt(el.setupTeacherDept.value);
+        const roomsInput = el.setupRooms.value.trim();
+        if (roomsInput) {
+          rooms = roomsInput.split(',').map(r => r.trim()).filter(r => r);
+        }
+      }
+      
+      const userId = generateUUID();
+      let finalRole = role;
+
+      if (role === 'teacher') {
+        finalRole = 'student'; // Initially set to student to allow viewing schedule
+        try {
+          await fetchAPI('/api/auth/request_teacher', {
+            method: 'POST',
+            body: JSON.stringify({
+              device_id: userId,
+              name: name,
+              department: dept,
+              rooms: rooms
+            })
+          });
+          alert('Ваша заявка отправлена модераторам. Пока ожидаете, можете пользоваться расписанием как студент.');
+        } catch(err) {
+          console.error("Failed to send teacher request", err);
+          alert("Не удалось отправить заявку, попробуйте позже.");
+          return;
+        }
+      }
+      
+      state.user = {
+        id: userId,
+        name: name,
+        role: finalRole,
+        department: dept,
+        group_id: groupId,
+        rooms: rooms,
+        settings: {
+          notifications: 1,
+          voice_alerts: 0,
+          voice_effect: 'echo',
+          fluffy_mode: 0
+        }
+      };
+      
+      localStorage.setItem('kalich_profile', JSON.stringify(state.user));
+      
+      el.viewSetup.classList.add('hidden');
+      el.viewMain.classList.remove('hidden');
+      startMainApp();
+    });
+  }
+
   // Navigation Tabs switching
   el.navButtons.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1172,7 +1420,7 @@ function setupEventListeners() {
         const result = await fetchAPI('/api/override', {
           method: 'POST',
           body: JSON.stringify({
-            initData: tg?.initData || "",
+            device_id: state.user.id,
             ...override
           })
         });
@@ -1180,9 +1428,7 @@ function setupEventListeners() {
         if (result && !result.error) {
           loadTeacherSchedule();
           loadSchedule();
-          if (tg) {
-            tg.showAlert('Замена успешно сохранена!');
-          }
+          alert('Замена успешно сохранена!');
         } else {
           alert('Ошибка сохранения: ' + (result?.error || 'Неизвестная ошибка'));
         }
@@ -1245,7 +1491,7 @@ function setupEventListeners() {
         const result = await fetchAPI('/api/override', {
           method: 'POST',
           body: JSON.stringify({
-            initData: tg?.initData || "",
+            device_id: state.user.id,
             ...clearAction
           })
         });
@@ -1263,7 +1509,6 @@ function setupEventListeners() {
   window.addEventListener('online', updateOnlineStatus);
   window.addEventListener('offline', updateOnlineStatus);
 
-  // Settings change listeners
   const saveSettings = async () => {
     const settings = {
       notifications: el.settingNotifications.checked ? 1 : 0,
@@ -1275,13 +1520,15 @@ function setupEventListeners() {
     state.user.settings = settings;
     localStorage.setItem('kalich_profile', JSON.stringify(state.user));
 
+    applySettings();
+
     // Send settings update to server if online
     if (navigator.onLine) {
       try {
         await fetchAPI('/api/settings', {
           method: 'POST',
           body: JSON.stringify({
-            initData: tg?.initData || "",
+            device_id: state.user.id,
             settings
           })
         });
@@ -1295,6 +1542,60 @@ function setupEventListeners() {
   el.settingVoice.addEventListener('change', saveSettings);
   el.settingVoiceEffect.addEventListener('change', saveSettings);
   el.settingFluffy.addEventListener('change', saveSettings);
+
+  // Voice Synthesis Logic
+  const voiceBtn = document.getElementById('btn-read-schedule');
+  if (voiceBtn) {
+    voiceBtn.addEventListener('click', () => {
+      if (!window.speechSynthesis) return;
+      
+      window.speechSynthesis.cancel(); // stop previous
+      
+      const title = el.scheduleTitle.textContent;
+      const cards = el.scheduleList.querySelectorAll('.lesson-card');
+      
+      let textToRead = title + ". ";
+      
+      if (cards.length === 0) {
+        textToRead += "Занятий нет, выходной!";
+      } else {
+        cards.forEach(card => {
+          const num = card.querySelector('.lesson-num')?.textContent || "";
+          const subj = card.querySelector('.lesson-subject')?.textContent || "";
+          const roomEl = card.querySelector('.lesson-room-group strong');
+          const room = roomEl ? "Кабинет " + roomEl.textContent : "";
+          const isOverride = card.querySelector('.badge-override') ? "Внимание, замена! " : "";
+          
+          textToRead += `${num}. ${isOverride}${subj}. ${room}. `;
+        });
+      }
+      
+      const utterance = new SpeechSynthesisUtterance(textToRead);
+      utterance.lang = 'ru-RU';
+      
+      const effect = state.user.settings?.voice_effect || 'normal';
+      if (effect === 'high') {
+        utterance.pitch = 1.8;
+      } else if (effect === 'low') {
+        utterance.pitch = 0.5;
+      } else {
+        utterance.pitch = 1.0;
+      }
+      
+      window.speechSynthesis.speak(utterance);
+    });
+  }
+
+  // Reset Profile Listener
+  if (document.getElementById('btn-reset-profile')) {
+    document.getElementById('btn-reset-profile').addEventListener('click', () => {
+      if (confirm('Вы уверены, что хотите выйти из профиля и сбросить настройки?')) {
+        localStorage.removeItem('kalich_profile');
+        localStorage.removeItem('kalich_default_group');
+        location.reload();
+      }
+    });
+  }
 
   // Moderator buttons listeners
   const formatDate = (date) => {
@@ -1336,7 +1637,7 @@ function setupEventListeners() {
       const res = await fetchAPI('/api/admin/fill', {
         method: 'POST',
         body: JSON.stringify({
-          initData: tg?.initData || "",
+          device_id: state.user.id,
           start_date: start,
           end_date: end,
           department: dept
@@ -1368,7 +1669,7 @@ function setupEventListeners() {
       const res = await fetchAPI('/api/admin/flush', {
         method: 'POST',
         body: JSON.stringify({
-          initData: tg?.initData || "",
+          device_id: state.user.id,
           start_date: start,
           end_date: end,
           department: dept

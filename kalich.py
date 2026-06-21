@@ -3795,6 +3795,50 @@ def handle_stats_callbacks(call):
             f"❌ Нет данных для графика за указанный период ({period_str})."))
 
 
+# =================== TEACHER APPROVAL FLOW ===================
+def send_teacher_approval_request(device_id, name, department, rooms):
+    rooms_str = ", ".join(rooms) if rooms else "Не указаны"
+    msg = (
+        f"👨‍🏫 *Новая заявка на преподавателя*\n\n"
+        f"Имя: {name}\n"
+        f"Отделение: {department}\n"
+        f"Кабинеты: {rooms_str}\n"
+        f"Device ID: {device_id}\n\n"
+        f"Одобрить или отклонить?"
+    )
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(
+        telebot.types.InlineKeyboardButton("✅ Одобрить", callback_data=f"teacher_approve:{device_id}"),
+        telebot.types.InlineKeyboardButton("❌ Отклонить", callback_data=f"teacher_reject:{device_id}")
+    )
+    
+    for mod_id in MODERATOR_IDS:
+        try:
+            bot.send_message(mod_id, msg, reply_markup=markup, parse_mode='Markdown')
+        except Exception as e:
+            print(f"Failed to send approval request to mod {mod_id}: {e}")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('teacher_'))
+def handle_teacher_approval(call):
+    chat_id = call.message.chat.id
+    if chat_id not in MODERATOR_IDS:
+        bot.answer_callback_query(call.id, "Нет прав!")
+        return
+
+    action, device_id_str = call.data.split(':')
+    device_id = int(device_id_str)
+    
+    conn = sqlite3.connect(DB_FILE)
+    if action == 'teacher_approve':
+        conn.execute("UPDATE teachers SET status='approved' WHERE chat_id=?", (device_id,))
+        bot.edit_message_text(f"✅ Заявка преподавателя ({device_id}) одобрена.", chat_id, call.message.message_id)
+    elif action == 'teacher_reject':
+        conn.execute("DELETE FROM teachers WHERE chat_id=?", (device_id,))
+        bot.edit_message_text(f"❌ Заявка преподавателя ({device_id}) отклонена.", chat_id, call.message.message_id)
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id)
+
 if __name__ == '__main__':
     load_groups_cache()
     init_db()

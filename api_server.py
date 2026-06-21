@@ -67,44 +67,65 @@ def get_group_lessons_helper(dept, group_id, day, date_str):
 async def handle_auth(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
-        
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        
-        # Developer fallback for testing outside Telegram
-        if not user_data:
-            print("[API] Using developer mock profile (outside Telegram)")
-            user_data = {
-                'id': 1234567,
-                'first_name': 'Тестовый',
-                'last_name': 'Учитель (Dev)',
-                'username': 'test_teacher_dev'
-            }
+        device_id = data.get('device_id')
+        if not device_id:
+            return web.json_response({'error': 'No device_id'}, status=400)
             
-        chat_id = user_data.get('id')
-        first_name = user_data.get('first_name', '')
-        last_name = user_data.get('last_name', '')
-        full_name = f"{first_name} {last_name}".strip()
+        chat_id = int(device_id)
         
+        # Determine role from DB
         role = 'student'
+        dept = 3
+        rooms = []
+        
         if chat_id in kalich.MODERATOR_IDS:
             role = 'moderator'
+            dept, rooms = kalich.get_teacher_info(chat_id)
         elif kalich.is_teacher(chat_id):
             role = 'teacher'
+            dept, rooms = kalich.get_teacher_info(chat_id)
             
-        dept, rooms = kalich.get_teacher_info(chat_id)
         settings = kalich.get_user_settings(chat_id)
         
         profile = {
             'id': chat_id,
-            'name': full_name or user_data.get('username', 'Пользователь'),
             'role': role,
-            'department': dept or 3,
+            'department': dept,
             'rooms': rooms,
             'settings': settings
         }
         
         return web.json_response({'user': profile})
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+# Request Teacher
+async def handle_request_teacher(request):
+    try:
+        data = await request.json()
+        device_id = data.get('device_id')
+        name = data.get('name')
+        department = int(data.get('department', 3))
+        rooms = data.get('rooms', [])
+        
+        if not device_id or not name:
+            return web.json_response({'error': 'Missing data'}, status=400)
+            
+        chat_id = int(device_id)
+        rooms_json = json.dumps(rooms, ensure_ascii=False)
+        
+        conn = sqlite3.connect(kalich.DB_FILE)
+        conn.execute(
+            "INSERT OR REPLACE INTO teachers (chat_id, department, rooms, name, status) VALUES (?, ?, ?, ?, 'pending')",
+            (chat_id, department, rooms_json, name)
+        )
+        conn.commit()
+        conn.close()
+        
+        # Send to telegram moderators
+        kalich.send_teacher_approval_request(chat_id, name, department, rooms)
+        
+        return web.json_response({'status': 'success'})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
@@ -222,10 +243,8 @@ async def handle_teacher_schedule(request):
 async def handle_override(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
-        
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        chat_id = user_data.get('id') if user_data else 1234567
+        device_id = data.get('device_id')
+        chat_id = int(device_id) if device_id else 1234567
         
         if chat_id != 1234567 and not kalich.is_teacher(chat_id) and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
@@ -458,9 +477,8 @@ async def handle_admin_overrides(request):
 async def handle_admin_delete_override(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        chat_id = user_data.get('id') if user_data else 1234567
+        device_id = data.get('device_id')
+        chat_id = int(device_id) if device_id else 1234567
         
         if chat_id != 1234567 and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
@@ -478,9 +496,8 @@ async def handle_admin_delete_override(request):
 async def handle_admin_flush(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        chat_id = user_data.get('id') if user_data else 1234567
+        device_id = data.get('device_id')
+        chat_id = int(device_id) if device_id else 1234567
         
         if chat_id != 1234567 and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
@@ -554,9 +571,8 @@ def background_fill_runner(start_date_str=None, end_date_str=None, department=No
 async def handle_admin_fill(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        chat_id = user_data.get('id') if user_data else 1234567
+        device_id = data.get('device_id')
+        chat_id = int(device_id) if device_id else 1234567
         
         if chat_id != 1234567 and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
@@ -610,6 +626,7 @@ def start_server():
     
     # API endpoints
     app.router.add_post('/api/auth', handle_auth)
+    app.router.add_post('/api/auth/request_teacher', handle_request_teacher)
     app.router.add_get('/api/groups', handle_groups)
     app.router.add_get('/api/schedule', handle_schedule)
     app.router.add_get('/api/teacher/schedule', handle_teacher_schedule)

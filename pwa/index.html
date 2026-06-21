@@ -10,8 +10,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <!-- Telegram Web App SDK -->
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body class="loading">
   <!-- Loader Screen -->
@@ -20,8 +18,90 @@
     <p>Загрузка Калич-Помощника...</p>
   </div>
 
+  <!-- PWA Blocker Overlay -->
+  <div id="pwa-blocker" class="loader-overlay hidden" style="z-index: 9999; padding: 20px; text-align: center;">
+    <div class="setup-icon" style="font-size: 64px; margin-bottom: 20px;">📱</div>
+    <h2 style="margin-bottom: 15px;">Установите приложение</h2>
+    <p style="margin-bottom: 25px; color: var(--text-secondary);">Для работы Калич-Помощника необходимо установить его как приложение (PWA) на ваш экран "Домой" или рабочий стол.</p>
+    <p id="pwa-blocker-hint" style="font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;">Нажмите "Поделиться" и выберите "На экран Домой" или используйте кнопку ниже.</p>
+    <button id="btn-pwa-blocker-install" class="btn btn-primary hidden" style="width: 100%;">Установить приложение</button>
+  </div>
+
+  <!-- Setup Container -->
+  <div id="view-setup" class="setup-container hidden">
+    <div class="setup-card card">
+      <div class="setup-header">
+        <div class="setup-icon">🦊</div>
+        <h2>Добро пожаловать</h2>
+        <p>Настройте Калич-Помощник для начала работы</p>
+      </div>
+      
+      <!-- PWA Install Banner -->
+      <div id="install-banner" class="install-banner hidden">
+        <p>Установите приложение для работы оффлайн</p>
+        <button id="btn-install-pwa" class="btn btn-primary btn-mini">Установить</button>
+      </div>
+
+      <form id="setup-form" class="setup-form">
+        <div class="form-group">
+          <label for="setup-role">Я...</label>
+          <select id="setup-role" required>
+            <option value="student">Студент</option>
+            <option value="teacher">Преподаватель</option>
+            <option value="moderator">Модератор</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="setup-name">Ваше имя / ФИО</label>
+          <input type="text" id="setup-name" required placeholder="Напр. Иван Иванов">
+        </div>
+
+        <!-- Student Fields -->
+        <div id="setup-student-fields">
+          <div class="form-group">
+            <label for="setup-dept">Отделение</label>
+            <select id="setup-dept">
+              <option value="1">Отделение 1</option>
+              <option value="2">Отделение 2</option>
+              <option value="3" selected>Отделение 3</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="setup-group">Моя группа</label>
+            <select id="setup-group">
+              <option value="">Выберите группу...</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Teacher Fields -->
+        <div id="setup-teacher-fields" class="hidden">
+          <div class="form-group">
+            <label for="setup-teacher-dept">Основное отделение</label>
+            <select id="setup-teacher-dept">
+              <option value="1">Отделение 1</option>
+              <option value="2">Отделение 2</option>
+              <option value="3" selected>Отделение 3</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="setup-rooms">Мои кабинеты</label>
+            <input type="text" id="setup-rooms" placeholder="Напр. 302, 305 (через запятую)">
+          </div>
+          <div class="form-group">
+            <label for="setup-password">Пароль (если требуется сервером)</label>
+            <input type="password" id="setup-password" placeholder="Секретный код">
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px;">Начать работу</button>
+      </form>
+    </div>
+  </div>
+
   <!-- Main Container -->
-  <div class="app-container">
+  <div id="view-main" class="app-container hidden">
     <!-- Header -->
     <header class="app-header">
       <div class="header-user-info">
@@ -90,7 +170,10 @@
         <div class="schedule-section">
           <div class="section-title">
             <h2 id="schedule-title">Расписание</h2>
-            <button id="btn-save-default" class="btn-icon" title="Сохранить как мою группу">⭐</button>
+            <div>
+              <button id="btn-read-schedule" class="btn-icon hidden" title="Озвучить расписание">🔊</button>
+              <button id="btn-save-default" class="btn-icon" title="Сохранить как мою группу">⭐</button>
+            </div>
           </div>
           <div id="schedule-list" class="schedule-list">
             <div class="empty-state">
@@ -222,23 +305,23 @@
         </div>
 
         <div class="settings-card card" style="margin-top: 15px;">
-          <h3>Уведомления и оповещения</h3>
+          <h3>Оповещения и интерфейс</h3>
           
           <div class="setting-row">
             <div class="setting-info">
-              <h4>Авто-уведомления</h4>
-              <p>Уведомлять в боте при изменении расписания</p>
+              <h4>Push-уведомления</h4>
+              <p>Получать системные уведомления о новых заменах (локально)</p>
             </div>
             <label class="switch">
-              <input type="checkbox" id="setting-notifications" checked>
+              <input type="checkbox" id="setting-notifications">
               <span class="slider round"></span>
             </label>
           </div>
 
           <div class="setting-row">
             <div class="setting-info">
-              <h4>Голосовые оповещения</h4>
-              <p>Присылать голосовые файлы с заменами</p>
+              <h4>Голосовой помощник</h4>
+              <p>Озвучивать расписание и замены голосом</p>
             </div>
             <label class="switch">
               <input type="checkbox" id="setting-voice">
@@ -247,29 +330,33 @@
           </div>
 
           <div class="form-group" style="margin-top: 15px;">
-            <label for="setting-voice-effect">Эффект голосовых</label>
+            <label for="setting-voice-effect">Тон голоса</label>
             <select id="setting-voice-effect">
-              <option value="echo">Эхо</option>
-              <option value="robot">Робот</option>
-              <option value="slow">Замедленный</option>
               <option value="normal">Обычный</option>
+              <option value="high">Высокий</option>
+              <option value="low">Низкий (Бас)</option>
             </select>
           </div>
         </div>
 
         <div class="settings-card card" style="margin-top: 15px;">
-          <h3>Дополнительно</h3>
+          <h3>Оформление</h3>
           
           <div class="setting-row">
             <div class="setting-info">
               <h4>Fluffy Mode 🦊</h4>
-              <p>Милое лисье оформление и стикеры в чате</p>
+              <p>Милое лисье оформление (изменение темы PWA)</p>
             </div>
             <label class="switch">
               <input type="checkbox" id="setting-fluffy">
               <span class="slider round"></span>
             </label>
           </div>
+        </div>
+
+        <div class="settings-card card" style="margin-top: 15px;">
+          <h3>Управление профилем</h3>
+          <button id="btn-reset-profile" class="btn btn-danger" style="width:100%;">Сбросить профиль и выйти</button>
         </div>
 
         <div class="info-footer">
@@ -355,7 +442,19 @@
       </button>
     </nav>
   </div>
+  </div>
 
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').then(reg => {
+          console.log('ServiceWorker registration successful');
+        }).catch(err => {
+          console.log('ServiceWorker registration failed: ', err);
+        });
+      });
+    }
+  </script>
   <script src="/app.js"></script>
 </body>
 </html>

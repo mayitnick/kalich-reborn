@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kalich-pwa-v1';
+const CACHE_NAME = 'kalich-pwa-v2';
 const ASSETS = [
   '/',
   '/index.html',
@@ -73,7 +73,7 @@ self.addEventListener('fetch', (event) => {
   } else {
     // For static files, Cache-First strategy
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
+      caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
         if (cachedResponse) {
           return cachedResponse;
         }
