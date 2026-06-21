@@ -1445,6 +1445,10 @@ function setupEventListeners() {
       el.overrideSubject.value = 'Отменено';
       el.overrideRoom.value = '';
       el.overrideForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      // Show undo button after cancelling a lesson
+      if (el.btnUndoCancel) {
+        el.btnUndoCancel.classList.remove('hidden');
+      }
     });
   }
   
@@ -1454,6 +1458,8 @@ function setupEventListeners() {
       if (el.btnDeleteOverride) {
         el.btnDeleteOverride.click();
       }
+      // Hide undo button after undo action
+      el.btnUndoCancel.classList.add('hidden');
     });
   }
 
