@@ -99,6 +99,11 @@ const el = {
   overrideSubject: document.getElementById('override-subject'),
   overrideRoom: document.getElementById('override-room'),
   btnDeleteOverride: document.getElementById('btn-delete-override'),
+  btnCancelLesson: document.getElementById('btn-cancel-lesson'),
+  btnUndoCancel: document.getElementById('btn-undo-cancel'),
+  
+  // Teacher UI additions
+  inputTeacherDate: document.getElementById('input-teacher-date'),
   
   // Settings
   settingNotifications: document.getElementById('setting-notifications'),
@@ -108,9 +113,11 @@ const el = {
   
   // Analytics
   statsType: document.getElementById('stats-type'),
+  statsDept: document.getElementById('stats-dept'),
+  statsGroupSelectors: document.getElementById('stats-group-selectors'),
+  statsTeacherSelector: document.getElementById('stats-teacher-selector'),
   statsTarget: document.getElementById('stats-target'),
   statsTargetInput: document.getElementById('stats-target-input'),
-  labelStatsTarget: document.getElementById('label-stats-target'),
   svgSubjects: document.getElementById('svg-subjects'),
   svgDaily: document.getElementById('svg-daily'),
   svgGroups: document.getElementById('svg-groups'),
@@ -178,30 +185,10 @@ async function initApp() {
   setupEventListeners();
   loadLocalCache();
   
-  // Attempt to sync auth status
-  try {
-    if (state.user && state.user.id) {
-      const authResponse = await fetchAPI('/api/auth', {
-        method: 'POST',
-        body: JSON.stringify({ device_id: state.user.id })
-      });
-      
-      if (authResponse && !authResponse.error && authResponse.user) {
-        // If backend says we are an approved teacher, update the role
-        if (authResponse.user.role === 'teacher' && state.user.role !== 'teacher') {
-          state.user.role = 'teacher';
-          state.user.department = authResponse.user.department;
-          state.user.rooms = authResponse.user.rooms;
-          localStorage.setItem('kalich_profile', JSON.stringify(state.user));
-          alert("Ваша заявка на преподавателя была одобрена!");
-        } else if (authResponse.user.role === 'moderator') {
-          state.user.role = 'moderator';
-          localStorage.setItem('kalich_profile', JSON.stringify(state.user));
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("Auth check failed", e);
+  // Start background auth polling
+  if (state.user && state.user.id) {
+    checkAuthStatus();
+    setInterval(checkAuthStatus, 10000);
   }
 
   // Check Profile
@@ -227,6 +214,13 @@ async function initApp() {
     el.viewSetup.classList.add('hidden');
     el.viewMain.classList.remove('hidden');
     
+    // Auto-select tab based on role
+    if (state.user.role === 'teacher') {
+      state.currentTab = 'tab-teacher';
+    } else if (state.user.role === 'moderator') {
+      state.currentTab = 'tab-moderator';
+    }
+    
     // Fetch groups
     await loadGroups();
     
@@ -243,6 +237,39 @@ async function initApp() {
     // Hide loader
     document.body.classList.remove('loading');
     document.body.classList.add('ready');
+  }
+}
+
+async function checkAuthStatus() {
+  if (!state.user || !state.user.id) return;
+  try {
+    const authResponse = await fetchAPI('/api/auth', {
+      method: 'POST',
+      body: JSON.stringify({ device_id: state.user.id })
+    });
+    
+    if (authResponse && !authResponse.error && authResponse.user) {
+      let changed = false;
+      if (authResponse.user.role === 'teacher' && state.user.role !== 'teacher') {
+        state.user.role = 'teacher';
+        state.user.department = authResponse.user.department;
+        state.user.rooms = authResponse.user.rooms;
+        changed = true;
+        alert("Ваша заявка на преподавателя была одобрена!");
+      } else if (authResponse.user.role === 'moderator' && state.user.role !== 'moderator') {
+        state.user.role = 'moderator';
+        changed = true;
+        alert("Вам выданы права модератора!");
+      }
+
+      if (changed) {
+        localStorage.setItem('kalich_profile', JSON.stringify(state.user));
+        // Force UI update
+        startMainApp();
+      }
+    }
+  } catch (e) {
+    console.warn("Auth check failed", e);
   }
 }
 
@@ -332,6 +359,12 @@ async function startMainApp() {
   
   // Initialize analytics tab objects
   setupAnalyticsDropdown();
+
+  // Switch to initial tab visually
+  const activeBtn = document.querySelector(`.nav-item[data-tab="${state.currentTab}"]`);
+  if (activeBtn) {
+    activeBtn.click();
+  }
 }
 
 function loadLocalCache() {
@@ -489,7 +522,7 @@ async function loadSchedule() {
     el.scheduleList.innerHTML = `
       <div class="empty-state">
         <span class="empty-icon">📅</span>
-        <p>Выберите группу для просмотра расписания</p>
+        <p>Выберите группу в меню сверху, чтобы посмотреть её расписание</p>
       </div>`;
     return;
   }
@@ -504,20 +537,26 @@ async function loadSchedule() {
     el.scheduleTitle.textContent = `Расписание: ${groupName} (${dayLabels[day] || ""})`;
   }
 
-  // Update save default UI
-  const savedGroup = localStorage.getItem('kalich_default_group');
-  if (savedGroup) {
-    const [savedDep, savedGid] = JSON.parse(savedGroup);
-    if (savedDep === dep && savedGid === parseInt(gid)) {
-      el.btnSaveDefault.textContent = '★';
-      el.btnSaveDefault.classList.add('active');
+  // Hide save default button for non-students
+  if (state.user && (state.user.role === 'teacher' || state.user.role === 'moderator')) {
+    el.btnSaveDefault.classList.add('hidden');
+  } else {
+    el.btnSaveDefault.classList.remove('hidden');
+    // Update save default UI
+    const savedGroup = localStorage.getItem('kalich_default_group');
+    if (savedGroup) {
+      const [savedDep, savedGid] = JSON.parse(savedGroup);
+      if (savedDep === dep && savedGid === parseInt(gid)) {
+        el.btnSaveDefault.textContent = '★';
+        el.btnSaveDefault.classList.add('active');
+      } else {
+        el.btnSaveDefault.textContent = '☆';
+        el.btnSaveDefault.classList.remove('active');
+      }
     } else {
       el.btnSaveDefault.textContent = '☆';
       el.btnSaveDefault.classList.remove('active');
     }
-  } else {
-    el.btnSaveDefault.textContent = '☆';
-    el.btnSaveDefault.classList.remove('active');
   }
 
   // Render skeleton loading
@@ -621,23 +660,25 @@ function renderSchedule(lessons) {
   }
 }
 
-// =================== TEACHER OVERRIDES ===================
+// =================== TEACHER SPECIFIC LOGIC ===================
 async function loadTeacherSchedule() {
-  const day = state.teacherSelectedDay;
+  const dateStr = state.teacherSelectedDate || state.currentDate;
+  
   el.teacherScheduleList.innerHTML = `
     <div class="empty-state">
       <div class="loader-spinner" style="width:30px;height:30px;border-width:3px;"></div>
-      <p>Загрузка расписания...</p>
+      <p>Загрузка...</p>
     </div>`;
 
   try {
-    const data = await fetchAPI(`/api/teacher/schedule?chat_id=${state.user.id}&day=${day}`);
-    renderTeacherSchedule(data || []);
+    const data = await fetchAPI(`/api/teacher/schedule?chat_id=${state.user.id}&date=${dateStr}`);
+    if (data.error) throw new Error(data.error);
+    renderTeacherSchedule(data);
   } catch (e) {
     el.teacherScheduleList.innerHTML = `
       <div class="empty-state">
         <span class="empty-icon">⚠️</span>
-        <p>Не удалось получить расписание преподавателя</p>
+        <p>Не удалось загрузить расписание</p>
       </div>`;
   }
 }
@@ -655,20 +696,21 @@ function renderTeacherSchedule(schedule) {
   el.teacherScheduleList.innerHTML = '';
   
   schedule.forEach((slots, idx) => {
-    // If empty list, means free slot
-    const isFree = slots.length === 0;
     const time = SLOT_TIMES[idx] || ["??:??", "??:??"];
-    const slotIdxNum = idx; // 0-indexed lesson number
-
     const card = document.createElement('div');
-    card.className = 'lesson-card clickable';
+    card.className = 'lesson-card';
+    card.style.cursor = 'pointer';
+    card.style.position = 'relative'; // Added for absolute positioning of pencil
     
+    // Check if it is an empty slot
+    const isEmpty = slots.length === 0;
+
     // On click, open substitution form
     card.addEventListener('click', () => {
-      openOverrideModal(slotIdxNum, slots);
+      openOverrideModal(idx, time, slots);
     });
 
-    if (isFree) {
+    if (isEmpty) {
       card.innerHTML = `
         <div class="lesson-time">
           <span class="lesson-num">Урок ${idx + 1}</span>
@@ -679,6 +721,7 @@ function renderTeacherSchedule(schedule) {
           <div class="lesson-subject" style="color:var(--text-secondary);font-style:italic;">Свободный слот</div>
           <div class="lesson-room-group">Нажмите для назначения замены</div>
         </div>
+        <div style="position: absolute; right: 10px; top: 10px; opacity: 0.3;">✏️</div>
       `;
     } else {
       // Check if it is a lunch slot (single slot with ОБЕД)
@@ -718,6 +761,7 @@ function renderTeacherSchedule(schedule) {
             <div class="lesson-subject">${details}</div>
             ${rooms ? `<div class="lesson-room-group">🚪 Кабинет: ${rooms}</div>` : ''}
           </div>
+          <div style="position: absolute; right: 10px; top: 10px; opacity: 0.3;">✏️</div>
         `;
       }
     }
@@ -778,6 +822,17 @@ function openOverrideModal(slotIdx, slots) {
     if (state.groups[grpName]) {
       const [dep, gid] = state.groups[grpName];
       el.overrideGroup.value = `${dep}-${gid}`;
+    }
+  }
+
+  // Toggle Cancel/Undo Cancel buttons based on current state
+  if (el.btnCancelLesson && el.btnUndoCancel) {
+    if (el.overrideSubject.value.trim().toLowerCase() === 'отменено') {
+      el.btnCancelLesson.classList.add('hidden');
+      el.btnUndoCancel.classList.remove('hidden');
+    } else {
+      el.btnCancelLesson.classList.remove('hidden');
+      el.btnUndoCancel.classList.add('hidden');
     }
   }
 
@@ -858,6 +913,11 @@ function setupAnalyticsDropdown() {
     renderAnalyticsCharts();
   });
   
+  el.statsDept.addEventListener('change', () => {
+    updateAnalyticsTargetDropdown();
+    renderAnalyticsCharts();
+  });
+  
   el.statsTarget.addEventListener('change', renderAnalyticsCharts);
   el.statsTargetInput.addEventListener('input', renderAnalyticsCharts);
 }
@@ -867,49 +927,35 @@ function updateAnalyticsTargetDropdown() {
   el.statsTarget.innerHTML = '';
   
   if (type === 'group') {
-    el.statsTarget.classList.remove('hidden');
-    el.statsTargetInput.classList.add('hidden');
-    el.labelStatsTarget.textContent = 'Группа';
+    el.statsGroupSelectors.classList.remove('hidden');
+    el.statsTeacherSelector.classList.add('hidden');
     
-    // Group options by department: 1, 2, 3
-    const groupsByDept = { 1: [], 2: [], 3: [] };
+    const targetDept = parseInt(el.statsDept.value) || 3;
+    
+    // Filter groups by department
+    const groups = [];
     for (const [name, info] of Object.entries(state.groups)) {
-      const dep = info[0];
-      const gid = info[1];
-      if (groupsByDept[dep]) {
-        groupsByDept[dep].push({ name, gid, value: `${dep}-${gid}` });
+      if (info[0] === targetDept) {
+        groups.push({ name, gid: info[1], value: `${targetDept}-${info[1]}` });
       }
     }
     
-    // Sort and append each department's groups using optgroups
-    for (const dep of [1, 2, 3]) {
-      if (groupsByDept[dep].length === 0) continue;
-      groupsByDept[dep].sort((a, b) => a.name.localeCompare(b.name));
-      
-      const optgroup = document.createElement('optgroup');
-      optgroup.label = `Отделение ${dep}`;
-      
-      groupsByDept[dep].forEach(g => {
-        const opt = document.createElement('option');
-        opt.value = g.value;
-        opt.textContent = g.name;
-        optgroup.appendChild(opt);
-      });
-      el.statsTarget.appendChild(optgroup);
-    }
+    groups.sort((a, b) => a.name.localeCompare(b.name));
     
-    if (state.selectedGroup) {
+    groups.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.value;
+      opt.textContent = g.name;
+      el.statsTarget.appendChild(opt);
+    });
+    
+    if (state.selectedGroup && targetDept === state.selectedDept) {
       el.statsTarget.value = `${state.selectedDept}-${state.selectedGroup}`;
     }
   } else {
-    el.statsTarget.classList.add('hidden');
-    el.statsTargetInput.classList.remove('hidden');
-    el.labelStatsTarget.textContent = 'Номер кабинета';
-    if (!el.statsTargetInput.value) {
-      el.statsTargetInput.value = '302'; // default
-    }
+    el.statsGroupSelectors.classList.add('hidden');
+    el.statsTeacherSelector.classList.remove('hidden');
   }
-  renderAnalyticsCharts();
 }
 
 async function renderAnalyticsCharts() {
@@ -1164,6 +1210,30 @@ function drawDailyLoadChart(daily) {
 
 // =================== EVENT LISTENERS ===================
 function setupEventListeners() {
+  // Toggles for schedule view filters
+  const btnToggleDate = document.getElementById('btn-toggle-date');
+  const btnToggleGroup = document.getElementById('btn-toggle-group');
+  const filterDateSec = document.getElementById('filter-date-section');
+  const filterGroupSec = document.getElementById('filter-group-section');
+
+  if (btnToggleDate) {
+    btnToggleDate.addEventListener('click', () => {
+      filterDateSec.classList.toggle('hidden');
+      if (!filterDateSec.classList.contains('hidden')) {
+        filterGroupSec.classList.add('hidden');
+      }
+    });
+  }
+
+  if (btnToggleGroup) {
+    btnToggleGroup.addEventListener('click', () => {
+      filterGroupSec.classList.toggle('hidden');
+      if (!filterGroupSec.classList.contains('hidden')) {
+        filterDateSec.classList.add('hidden');
+      }
+    });
+  }
+
   // PWA Install Button
   if (el.btnInstallPwa) {
     el.btnInstallPwa.addEventListener('click', async () => {
@@ -1366,30 +1436,43 @@ function setupEventListeners() {
   // Sync Banner Button
   el.btnSyncRetry.addEventListener('click', processOfflineQueue);
 
-  // Close modal click
-  el.btnCloseModal.addEventListener('click', () => el.overrideModal.classList.add('hidden'));
+  if (el.btnCloseModal) {
+    el.btnCloseModal.addEventListener('click', () => el.overrideModal.classList.add('hidden'));
+  }
+  
+  if (el.btnCancelLesson) {
+    el.btnCancelLesson.addEventListener('click', () => {
+      el.overrideSubject.value = 'Отменено';
+      el.overrideRoom.value = '';
+      el.overrideForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    });
+  }
+  
+  if (el.btnUndoCancel) {
+    el.btnUndoCancel.addEventListener('click', () => {
+      // "Отменить отмену" effectively means resetting the override
+      if (el.btnDeleteOverride) {
+        el.btnDeleteOverride.click();
+      }
+    });
+  }
+
+  // Teacher Schedule Date Picker
+  if (el.inputTeacherDate) {
+    el.inputTeacherDate.addEventListener('change', (e) => {
+      state.teacherSelectedDate = e.target.value;
+      const d = new Date(e.target.value).getDay();
+      state.teacherSelectedDay = d === 0 ? 1 : d;
+      loadTeacherSchedule();
+    });
+  }
 
   // Override Form submission
   el.overrideForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
     // Determine the date to send with override
-    let overrideDate = state.selectedDate;
-    if (state.currentTab === 'tab-teacher') {
-      const d = state.teacherSelectedDay;
-      const today = new Date();
-      const dayOfWeek = today.getDay();
-      const diff = today.getDate() - (dayOfWeek === 0 ? 7 : dayOfWeek) + d;
-      const targetDt = new Date(today.setDate(diff));
-      overrideDate = formatDate(targetDt);
-    } else if (!overrideDate && state.selectedDay && state.selectedDay !== 'all') {
-      const d = state.selectedDay;
-      const today = new Date();
-      const dayOfWeek = today.getDay();
-      const diff = today.getDate() - (dayOfWeek === 0 ? 7 : dayOfWeek) + d;
-      const targetDt = new Date(today.setDate(diff));
-      overrideDate = formatDate(targetDt);
-    }
+    let overrideDate = state.teacherSelectedDate || state.selectedDate || state.currentDate;
     
     const groupVal = el.overrideGroup.value;
     let overrideDept = state.user.department;
@@ -1972,11 +2055,41 @@ async function fetchAPI(url, options = {}) {
 }
 
 // Register service worker for installable PWA
+let refreshing = false;
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then(reg => console.log('ServiceWorker registration successful', reg.scope))
-      .catch(err => console.error('ServiceWorker registration failed', err));
+    navigator.serviceWorker.register('/sw.js').then(reg => {
+      console.log('ServiceWorker registration successful', reg.scope);
+
+      // Setup update flow
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // New update available! Show banner.
+            const updateBanner = document.getElementById('update-banner');
+            const btnUpdateApp = document.getElementById('btn-update-app');
+            if (updateBanner && btnUpdateApp) {
+              updateBanner.classList.remove('hidden');
+              btnUpdateApp.addEventListener('click', () => {
+                updateBanner.classList.add('hidden');
+                newWorker.postMessage({ type: 'SKIP_WAITING' });
+              });
+            }
+          }
+        });
+      });
+    }).catch(err => console.error('ServiceWorker registration failed', err));
+
+    // Listen for the controlling service worker changing
+    // and reload the page
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
+    });
   });
 }
 

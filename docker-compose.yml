@@ -1,0 +1,23 @@
+version: "3.9"
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: kalich_frontend
+    restart: always
+    ports:
+      - "80:80"
+    environment:
+      - NODE_ENV=production
+    # If you need to serve over HTTPS, you can add an Nginx config later.
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: kalich_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file: .env
+    # You can add healthcheck if desired.

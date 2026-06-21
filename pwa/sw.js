@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kalich-pwa-v2';
+const CACHE_NAME = 'kalich-pwa-v7';
 const ASSETS = [
   '/',
   '/index.html',
@@ -8,6 +8,12 @@ const ASSETS = [
   '/icons/icon-192.png',
   '/icons/icon-512.png'
 ];
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
 
 // Install Service Worker
 self.addEventListener('install', (event) => {

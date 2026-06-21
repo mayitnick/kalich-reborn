@@ -1064,11 +1064,26 @@ def get_teacher_info(chat_id):
     return None, []
 
 
-def get_teacher_schedule(chat_id, day, all_data):
+def get_teacher_schedule(chat_id, day, all_data, date_str=""):
     """Собирает расписание учителя по его кабинетам из данных всех групп."""
     dept, rooms = get_teacher_info(chat_id)
     if not rooms or dept is None:
         return None, [], []
+        
+    # Получаем замены, сделанные именно этим преподавателем
+    my_overrides_set = set()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        if date_str:
+            cur = conn.execute("SELECT slot_idx, group_id FROM teacher_room_overrides WHERE teacher_chat_id=? AND department=? AND day=? AND date=?", (chat_id, dept, day, date_str))
+        else:
+            cur = conn.execute("SELECT slot_idx, group_id FROM teacher_room_overrides WHERE teacher_chat_id=? AND department=? AND day=? AND (date IS NULL OR date='')", (chat_id, dept, day))
+        for row in cur.fetchall():
+            my_overrides_set.add((row[0], row[1]))
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching overrides for get_teacher_schedule: {e}")
+
     max_slots = 10 if day == 1 else 8
     schedule = [[] for _ in range(max_slots)]
     for (dep, gid), lessons in all_data.items():
@@ -1078,7 +1093,11 @@ def get_teacher_schedule(chat_id, day, all_data):
         for idx in range(min(len(lessons), max_slots)):
             l_str = str(lessons[idx])
             room = extract_room(l_str)
-            if room and any(r.strip() in room for r in rooms):
+            
+            is_my_room = room and any(r.strip() in room for r in rooms)
+            is_my_override = (idx, gid) in my_overrides_set
+            
+            if is_my_room or is_my_override:
                 subj = re.sub(r'\s*\(.*$', '', l_str).strip()
                 schedule[idx].append((group_name, subj, room))
 

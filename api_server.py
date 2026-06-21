@@ -234,7 +234,7 @@ async def handle_teacher_schedule(request):
         all_data = kalich.get_all_schedules_for_day(day)
         all_data = kalich.apply_teacher_overrides(all_data, day, date_str)
         
-        dept, rooms, schedule = kalich.get_teacher_schedule(chat_id, day, all_data)
+        dept, rooms, schedule = kalich.get_teacher_schedule(chat_id, day, all_data, date_str)
         return web.json_response(schedule)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)

@@ -129,40 +129,50 @@
       <!-- TAB 1: SCHEDULE -->
       <section id="tab-schedule" class="tab-view active">
         <!-- Filter Controls -->
-        <div class="filter-panel card">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="select-dept">Отделение</label>
-              <select id="select-dept">
-                <option value="1">Отделение 1</option>
-                <option value="2">Отделение 2</option>
-                <option value="3" selected>Отделение 3</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="select-group">Группа</label>
-              <select id="select-group">
-                <option value="">Выберите группу...</option>
-                <option value="all">Все группы отделения</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="input-schedule-date">Поиск по дате</label>
-              <input type="date" id="input-schedule-date">
-            </div>
+        <div class="filter-panel card" style="padding-bottom: 8px;">
+          <div class="filter-toggles" style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+            <button id="btn-toggle-date" class="btn btn-secondary btn-mini" style="flex: 1; padding: 8px;">📅 Выбрать другой день</button>
+            <button id="btn-toggle-group" class="btn btn-secondary btn-mini" style="flex: 1; padding: 8px;">🎓 Другая группа</button>
           </div>
           
-          <!-- Day of Week selector -->
-          <div class="day-selector">
-            <button class="day-btn" data-day="1">Пн</button>
-            <button class="day-btn" data-day="2">Вт</button>
-            <button class="day-btn" data-day="3">Ср</button>
-            <button class="day-btn" data-day="4">Чт</button>
-            <button class="day-btn" data-day="5">Пт</button>
-            <button class="day-btn" data-day="6">Сб</button>
-            <button class="day-btn" data-day="all">Вся неделя</button>
+          <div id="filter-group-section" class="hidden" style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="select-dept">Отделение</label>
+                <select id="select-dept">
+                  <option value="1">Отделение 1</option>
+                  <option value="2">Отделение 2</option>
+                  <option value="3" selected>Отделение 3</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="select-group">Группа</label>
+                <select id="select-group">
+                  <option value="">Выберите группу...</option>
+                  <option value="all">Все группы отделения</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div id="filter-date-section" class="hidden" style="margin-top: 12px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="input-schedule-date">Поиск по дате</label>
+                <input type="date" id="input-schedule-date">
+              </div>
+            </div>
+            
+            <!-- Day of Week selector -->
+            <div class="day-selector">
+              <button class="day-btn" data-day="1">Пн</button>
+              <button class="day-btn" data-day="2">Вт</button>
+              <button class="day-btn" data-day="3">Ср</button>
+              <button class="day-btn" data-day="4">Чт</button>
+              <button class="day-btn" data-day="5">Пт</button>
+              <button class="day-btn" data-day="6">Сб</button>
+              <button class="day-btn" data-day="all">Вся неделя</button>
+            </div>
           </div>
         </div>
 
@@ -178,7 +188,7 @@
           <div id="schedule-list" class="schedule-list">
             <div class="empty-state">
               <span class="empty-icon">📅</span>
-              <p>Выберите группу для просмотра расписания</p>
+              <p id="schedule-empty-text">Выберите группу в меню сверху, чтобы посмотреть её расписание</p>
             </div>
           </div>
         </div>
@@ -189,13 +199,9 @@
         <div class="teacher-welcome-card card gradient-border">
           <h2 id="teacher-info-title">Панель преподавателя</h2>
           <p id="teacher-rooms-info">Кабинеты не привязаны</p>
-          <div class="day-selector teacher-day-selector">
-            <button class="t-day-btn" data-day="1">Пн</button>
-            <button class="t-day-btn" data-day="2">Вт</button>
-            <button class="t-day-btn" data-day="3">Ср</button>
-            <button class="t-day-btn" data-day="4">Чт</button>
-            <button class="t-day-btn" data-day="5">Пт</button>
-            <button class="t-day-btn" data-day="6">Сб</button>
+          <div class="form-group" style="margin-top: 12px;">
+            <label for="input-teacher-date" style="color: var(--text-secondary); font-size: 12px;">Дата расписания</label>
+            <input type="date" id="input-teacher-date" style="margin-top: 4px;">
           </div>
         </div>
 
@@ -235,6 +241,11 @@
                 <input type="text" id="override-room" placeholder="Напр. 302 (оставьте пустым без изменений)">
               </div>
 
+              <div class="form-actions" style="margin-bottom: 8px;">
+                <button type="button" id="btn-cancel-lesson" class="btn btn-secondary" style="width: 100%; border: 1px solid var(--danger); color: var(--danger);">Отменить пару ❌</button>
+                <button type="button" id="btn-undo-cancel" class="btn btn-secondary hidden" style="width: 100%; border: 1px solid var(--success); color: var(--success);">Отменить отмену ↩️</button>
+              </div>
+
               <div class="form-actions">
                 <button type="button" id="btn-delete-override" class="btn btn-danger">Сбросить замену</button>
                 <button type="submit" class="btn btn-primary">Сохранить</button>
@@ -248,20 +259,37 @@
       <section id="tab-analytics" class="tab-view">
         <div class="analytics-filter card">
           <h3>Аналитика загруженности</h3>
-          <div class="form-row">
-            <div class="form-group">
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="width: 100%;">
               <label for="stats-type">Тип анализа</label>
               <select id="stats-type">
                 <option value="group">Учебная группа</option>
                 <option value="teacher">Кабинет</option>
               </select>
             </div>
+          </div>
+          
+          <div class="form-row" id="stats-group-selectors">
             <div class="form-group">
-              <label for="stats-target" id="label-stats-target">Объект</label>
-              <select id="stats-target">
-                <!-- Populated dynamically based on stats-type -->
+              <label for="stats-dept">Отделение</label>
+              <select id="stats-dept">
+                <option value="1">Отделение 1</option>
+                <option value="2">Отделение 2</option>
+                <option value="3" selected>Отделение 3</option>
               </select>
-              <input type="text" id="stats-target-input" class="hidden" placeholder="Номер кабинета, напр. 302">
+            </div>
+            <div class="form-group">
+              <label for="stats-target">Группа</label>
+              <select id="stats-target">
+                <!-- Populated dynamically -->
+              </select>
+            </div>
+          </div>
+          
+          <div class="form-row hidden" id="stats-teacher-selector">
+            <div class="form-group" style="width: 100%;">
+              <label for="stats-target-input">Номер кабинета</label>
+              <input type="text" id="stats-target-input" placeholder="Напр. 302">
             </div>
           </div>
         </div>
@@ -444,17 +472,14 @@
   </div>
   </div>
 
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').then(reg => {
-          console.log('ServiceWorker registration successful');
-        }).catch(err => {
-          console.log('ServiceWorker registration failed: ', err);
-        });
-      });
-    }
-  </script>
+  <div id="update-banner" class="update-banner hidden">
+    <div class="update-banner-content">
+      <span class="update-icon">🚀</span>
+      <p>Доступна новая версия!</p>
+    </div>
+    <button id="btn-update-app" class="btn btn-primary btn-sm">Обновить</button>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
