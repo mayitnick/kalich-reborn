@@ -66,7 +66,7 @@ def api_url(memory_db):
     loop.close()
 
 def test_api_auth(api_url):
-    resp = requests.post(f"{api_url}/api/auth", json={'initData': ''})
+    resp = requests.post(f"{api_url}/api/auth", json={'device_id': '1234567'})
     assert resp.status_code == 200
     data = resp.json()
     assert 'user' in data
