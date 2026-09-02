@@ -16,7 +16,7 @@ class PhotoEchoHandler(BaseCommand):
     description = "Демонстрация перехвата изображений"
     requires = ["db"]
 
-    def execute(self, message: Message, ctx: AppContext):
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
         if not message.photo:
             return
         best_photo = message.photo[-1]
@@ -42,7 +42,7 @@ class CallStatusPatternHandler(BaseCommand):
     description = "Текстовый триггер проверки времени звонка"
     requires = ["notifier"]
 
-    def execute(self, message: Message, notifier: NotifierService):
+    def execute(self, message: Message, notifier: NotifierService, **kwargs):
         status, rem_time, idx = notifier.get_status()
         if status == "rest" or rem_time is None:
             message_text = "Сейчас нет пар или колледж уже закрыт."

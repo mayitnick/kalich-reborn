@@ -34,7 +34,11 @@ if mod_ids_env:
         except ValueError:
             pass
 MODERATOR_ID = MODERATOR_IDS[0] if MODERATOR_IDS else None
-LOG_GROUP_ID = int(os.getenv('LOG_GROUP_ID') or 0)
+try:
+    LOG_GROUP_ID = int(os.getenv('LOG_GROUP_ID') or 0)
+except ValueError:
+    LOG_GROUP_ID = 0
+
 
 SPECIAL_CHATS = {
     -1002949492641: 27602,

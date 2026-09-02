@@ -10,7 +10,7 @@ class AboutCommand(BaseCommand):
     description = "Информация о боте и авторах"
     requires = ["db"]
 
-    def execute(self, message: Message, ctx: AppContext):
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
         settings = ctx.db.get_user_settings(message.chat.id)
         if settings.get('fluffy_mode'):
             about_text = messages.ABOUT_FLUFFY

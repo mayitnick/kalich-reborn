@@ -10,7 +10,7 @@ class PingCommand(BaseCommand):
     description = "Проверка отклика и работоспособности бота"
     requires = ["db", "config"]
 
-    def execute(self, message: Message, ctx: AppContext):
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
         settings = ctx.db.get_user_settings(message.chat.id)
         if settings.get('fluffy_mode'):
             ctx.reply(message, messages.PING_FLUFFY)

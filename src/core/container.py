@@ -235,7 +235,11 @@ class AppContext:
 
     def reply(self, message: Message, text: str, **kwargs) -> Optional[Message]:
         """Безопасно отправляет ответ пользователю в правильный тред чата."""
-        return _reply_safe(message, text, **kwargs)
+        import sys
+        kalich_mod = sys.modules.get('kalich')
+        reply_fn = getattr(kalich_mod, 'reply_safe', _reply_safe) if kalich_mod else _reply_safe
+        return reply_fn(message, text, **kwargs)
+
 
     def wrap_code(self, text: str) -> str:
         """Оборачивает текст в блок моноширинного кода Markdown."""

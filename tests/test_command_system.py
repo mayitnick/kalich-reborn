@@ -43,8 +43,11 @@ def test_command_discovery():
 
     assert "ping" in cmd_names
     assert "about" in cmd_names
+    assert "cancel" in cmd_names
+    assert "help" in cmd_names
     assert "photo_echo" in cmd_names
     assert "call_status_trigger" in cmd_names
+
 
 
 def test_dependency_validation_success():

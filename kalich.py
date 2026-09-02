@@ -21,8 +21,6 @@
 #       functionality, edit the `src` directory instead.
 #       However, if you're refactoring this file, you can remove this note.
 
-# And, here's ASCII art for improving mood (I hope so)
-
 # pyrefly: ignore [missing-import]
 import time
 _kalich_start_time = time.perf_counter()
@@ -202,158 +200,22 @@ def _render_schedule_msg(message, monitor, all_data,
 
 @bot.message_handler(commands=['r'])
 def cmd_r_today(message):
-    if is_teacher(message.chat.id):
-        return cmd_teacher_r(message)
-    day = datetime.now().isoweekday()
-    if day > 5:
-        return reply_safe(message, wrap_code("Отдыхай (выходной)"))
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    if not mons:
-        return reply_safe(message, "❌ Нет подписок.")
-    all_day_data = get_all_schedules_for_day(day)
-    all_day_data = apply_teacher_overrides(all_day_data, day)
-    for m in mons:
-        _render_schedule_msg(
-            message,
-            m,
-            all_day_data,
-            day,
-            f"📅 Сегодня: {m['group_name']}",
-            send_stickers=True)
+    from src.bot.commands.student.schedule import ScheduleTodayCommand
+    ScheduleTodayCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(regexp=r'^/db(\s+.*)?$')
 def cmd_db_router(message):
-    if is_teacher(message.chat.id):
-        return cmd_teacher_db(message)
-    args = message.text.replace('/db', '').strip().lower()
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    if not mons:
-        return reply_safe(message, "❌ Нет подписок.")
-
-    day_map = {'пн': 1, 'вт': 2, 'ср': 3, 'чт': 4, 'пт': 5, 'сб': 6}
-    day_labels = {1: "ПН", 2: "ВТ", 3: "СР", 4: "ЧТ", 5: "ПТ", 6: "СБ"}
-
-    # Обработка конкретной даты /db 16.06.2026
-    if re.match(r'^\d{2}\.\d{2}\.\d{4}$', args):
-        try:
-            target_date = datetime.strptime(
-                args, "%d.%m.%Y").strftime("%Y-%m-%d")
-            all_data = get_schedule_history_for_date(target_date)
-            if not all_data:
-                return reply_safe(message, wrap_code(
-                    f"🗄 Нет данных в архиве за {args}"))
-
-            target_weekday = datetime.strptime(args, "%d.%m.%Y").isoweekday()
-            all_data = apply_teacher_overrides(all_data, target_weekday)
-            for m in mons:
-                header = f"🗄 Архив ({args}): {m['group_name']}"
-                _render_schedule_msg(
-                    message,
-                    m,
-                    all_data,
-                    target_weekday,
-                    header,
-                    send_stickers=False)
-            return
-        except ValueError:
-            return reply_safe(message, wrap_code(
-                "Неверный формат даты. Используйте ДД.ММ.ГГГГ"))
-
-    # Обработка дня недели /db пн
-    if args in day_map:
-        target_day = day_map[args]
-        all_data = get_all_schedules_for_day(target_day)
-        if not all_data:
-            all_data = {}
-            for name, info in GROUP_NAME_TO_ID.items():
-                dep, gid = info[0], info[1]
-                if dep == mons[0]['department']:
-                    lessons = fetch_lessons(target_day, gid, dep)
-                    if lessons:
-                        all_data[(dep, gid)] = lessons
-
-        for m in mons:
-            header = f"🗓 Расписание на {day_labels[target_day]}: {m['group_name']}"
-            _render_schedule_msg(
-                message,
-                m,
-                all_data,
-                target_day,
-                header,
-                send_stickers=False)
-        return
-
-    # Классический /db (завтра/понедельник)
-    curr_day = datetime.now().isoweekday()
-    next_day = 1 if curr_day >= 5 else curr_day + 1
-    all_data = get_all_schedules_for_day(next_day)
-    all_data = apply_teacher_overrides(all_data, next_day)
-    for m in mons:
-        header = f"📦 БД на {day_labels[next_day]}: {m['group_name']}"
-        _render_schedule_msg(
-            message,
-            m,
-            all_data,
-            next_day,
-            header,
-            send_stickers=True)
+    from src.bot.commands.student.schedule import ScheduleArchiveCommand
+    ScheduleArchiveCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['now'])
 def cmd_now(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    if is_teacher(message.chat.id):
-        return cmd_teacher_now(message)
-    status, _, idx = get_status()
-    if status == "rest" or idx is None:
-        return reply_safe(message, wrap_code(
-            "Отдыхай\n(Используй /db)") + "\n\n/db")
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    if not mons:
-        return
-    day = datetime.now().isoweekday()
-    all_data = get_all_schedules_for_day(day)
-    all_data = apply_teacher_overrides(all_data, day)
-    m = mons[0]
-    key = (m['department'], m['group_id'])
-    lessons = all_data.get(key)
-    if lessons and len(lessons) > idx:
-        curr_l_raw = lessons[idx]
-        def clean_n(t): return re.sub(
-            r'\(?\d{2,4}[А-Яа-я]?\)?', '', str(t)).strip().lower()
-        target_n = clean_n(curr_l_raw)
-        first_idx = idx
-        while first_idx > 0 and clean_n(lessons[first_idx - 1]) == target_n:
-            first_idx -= 1
-        last_idx = idx
-        while last_idx < len(lessons) - \
-                1 and clean_n(lessons[last_idx + 1]) == target_n:
-            last_idx += 1
-        now_dt = datetime.now()
-        fmt = "%H:%M"
-        start_dt = datetime.strptime(CALLS[first_idx][0], fmt)
-        end_dt = datetime.strptime(CALLS[last_idx][1], fmt)
-        curr_dt = datetime.strptime(now_dt.strftime(fmt), fmt)
-        total_sec = (end_dt - start_dt).seconds
-        elapsed_sec = (curr_dt - start_dt).seconds
-        percent = min(100, max(0, (elapsed_sec / total_sec) * 100))
-        bar = "█" * int(percent // 10) + "░" * (10 - int(percent // 10))
-        lines = format_with_overlap(
-            message.chat.id,
-            m['department'],
-            m['group_id'],
-            day,
-            idx,
-            str(curr_l_raw),
-            all_data)
-        res_line = lines[0] if lines else str(curr_l_raw)
-        td = end_dt - curr_dt
-        h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
-        rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
-        lbl = "До конца блока:" if last_idx > first_idx else "До конца пары:"
-        reply_safe(message, wrap_code(
-            f"{res_line}\n{bar} {int(percent)}%\n{lbl} {rem}"))
+    from src.bot.commands.student.now import NowCommand
+    NowCommand().execute(message, service_container.create_context())
+
 
 
 @bot.message_handler(commands=['time'])
@@ -585,12 +447,9 @@ def cmd_move(message):
 
 @bot.message_handler(commands=['flush'])
 def cmd_flush(message):
-    if message.from_user.id in MODERATOR_IDS:
-        conn = sqlite3.connect(DB_FILE)
-        conn.execute("DELETE FROM schedules")
-        conn.commit()
-        conn.close()
-        reply_safe(message, "♻️ База очищена.")
+    from src.bot.commands.admin.flush import FlushCommand
+    FlushCommand().execute(message, service_container.create_context())
+
 
 
 @bot.message_handler(commands=['start'])
@@ -803,17 +662,8 @@ def cmd_ping(message):
 @bot.message_handler(commands=['cancel'])
 def cmd_cancel(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    cid = message.chat.id
-    canceled = False
-    for d in (waiting_for_department, user_department, waiting_for_teacher_dept,
-              waiting_for_teacher_rooms, waiting_for_stats_dates):
-        if cid in d:
-            del d[cid]
-            canceled = True
-    if canceled:
-        reply_safe(message, messages.CANCEL_SUCCESS)
-    else:
-        reply_safe(message, messages.CANCEL_NOTHING)
+    from src.bot.commands.common.cancel import CancelCommand
+    CancelCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['about'])
@@ -832,14 +682,9 @@ def cmd_about(message):
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    """Send a detailed help message with usage instructions for all bot commands."""
-    help_text = messages.HELP_TEXT_MAIN
+    from src.bot.commands.common.help import HelpCommand
+    HelpCommand().execute(message, service_container.create_context())
 
-    if is_teacher(message.chat.id):
-        help_text += messages.HELP_TEXT_TEACHER
-
-    help_text += messages.HELP_TEXT_EXTRA
-    reply_safe(message, help_text)
 
 
 def get_next_block_info(cid, department, gid, day, data, current_idx=None):
@@ -904,32 +749,9 @@ def get_next_block_info(cid, department, gid, day, data, current_idx=None):
 @bot.message_handler(commands=['next'])
 def cmd_next(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    if is_teacher(message.chat.id):
-        return cmd_teacher_next(message)
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    if not mons:
-        return reply_safe(
-            message, "❌ Нет подписок. Сначала отправь номер группы.")
-    day = datetime.now().isoweekday()
-    data = get_all_schedules_for_day(day)
-    m = mons[0]
-    status, _, idx = get_status()
-    info = get_next_block_info(
-        message.chat.id,
-        m['department'],
-        m['group_id'],
-        day,
-        data,
-        idx)
-    if info:
-        res = (
-            f"Далее: {info['name']}\n"
-            f"Длительность: {format_lessons_count(info['count'])}\n"
-            f"Через: {info['time_to']}"
-        )
-        reply_safe(message, wrap_code(res))
-    else:
-        reply_safe(message, wrap_code("Пар больше нет") + "\n\n/db")
+    from src.bot.commands.student.next import NextCommand
+    NextCommand().execute(message, service_container.create_context())
+
 
 
 def format_lessons_count(count):
@@ -947,40 +769,9 @@ def format_lessons_count(count):
 @bot.message_handler(commands=['sendall'])
 def cmd_sendall(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    if message.from_user.id not in MODERATOR_IDS:
-        return
-    source_text = ""
-    if message.reply_to_message:
-        source_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-    else:
-        source_text = message.text.replace('/sendall', '', 1).strip()
-    if not source_text:
-        return reply_safe(message, "⚠️ Нет текста для рассылки.")
-    header = "Новости:ㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤ"
-    full_block_text = f"```{header}\n{source_text}```"
-    found_commands = re.findall(r'(/[a-zA-Z0-9_]+)', source_text)
-    commands_message = " ".join(dict.fromkeys(found_commands))
-    sent_targets = set()
-    for m in monitor_manager.active_monitors.values():
-        cid = m['chat_id']
-        thread = m.get('message_thread_id') or SPECIAL_CHATS.get(cid)
-        target_key = (cid, thread)
-        if target_key in sent_targets:
-            continue
-        sent_targets.add(target_key)
-        try:
-            bot.send_message(
-                cid,
-                full_block_text,
-                parse_mode='Markdown',
-                message_thread_id=thread)
-            if commands_message:
-                bot.send_message(
-                    cid, commands_message, message_thread_id=thread)
-            time.sleep(0.1)
-        except BaseException:
-            continue
-    reply_safe(message, "✅ Рассылка выполнена.")
+    from src.bot.commands.admin.sendall import SendAllCommand
+    SendAllCommand().execute(message, service_container.create_context())
+
 
 
 @bot.message_handler(commands=['f'])
@@ -1082,26 +873,9 @@ def cmd_find_by_group(message):
 @bot.message_handler(commands=['fill'])
 def cmd_fill(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    if message.from_user.id not in MODERATOR_IDS:
-        return
-    reply_safe(message, "⏳ Заполнение базы (ПН-ПТ) для всех отделений...")
-    try:
-        c = 0
-        for d in [1, 2, 3, 4, 5]:
-            date_str = get_date_for_weekday(d)
-            for name, info in GROUP_NAME_TO_ID.items():
-                dep, gid = info[0], info[1]
-                raw = fetch_lessons(d, gid, dep)
-                if raw:
-                    h = hashlib.md5("".join(raw).encode()).hexdigest()
-                    save_schedule_to_db(
-                        dep, gid, d, h, json.dumps(
-                            raw, ensure_ascii=False), date_str)
-                    c += 1
-                time.sleep(0.05)
-        reply_safe(message, f"✅ База заполнена! Записей: {c}")
-    except Exception as e:
-        reply_safe(message, f"❌ Ошибка: {e}")
+    from src.bot.commands.admin.fill import FillCommand
+    FillCommand().execute(message, service_container.create_context())
+
 
 # ====== РЕГИСТРАЦИЯ И ВЫБОР РОЛИ ======
 
@@ -1320,113 +1094,9 @@ def handle_all(message):
 
 def cmd_stats(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    text_args = message.text.replace('/stats', '', 1).strip()
+    from src.bot.commands.admin.stats import StatsCommand
+    StatsCommand().execute(message, service_container.create_context())
 
-    # Parse dates from text_args
-    start_date, end_date = parse_date_range(text_args)
-    clean_args = text_args
-    if start_date:
-        clean_args = re.sub(r'\d{2}\.\d{2}\.\d{4}', '', clean_args).strip()
-        clean_args = re.sub(r'[\s\-—]+$', '', clean_args).strip()
-        clean_args = re.sub(r'^[\s\-—]+', '', clean_args).strip()
-
-    target_type = None  # 'group', 'teacher', 'room'
-    target_id = None
-    target_name = None
-    dept = None
-
-    tokens = clean_args.split()
-    if tokens:
-        first = tokens[0].lower()
-        if first in ['учитель', 'teacher']:
-            name_query = " ".join(tokens[1:]).strip()
-            if not name_query:
-                return reply_safe(message, wrap_code(
-                    "❌ Укажите имя преподавателя.\nПример: /stats учитель Hhh"))
-
-            conn = sqlite3.connect(DB_FILE)
-            res = conn.execute(
-                "SELECT chat_id, name, department, rooms FROM teachers WHERE name LIKE ? AND status='approved'",
-                (f"%{name_query}%",
-                 )).fetchall()
-            conn.close()
-            if not res:
-                return reply_safe(message, wrap_code(
-                    f"❌ Преподаватель '{name_query}' не найден или не одобрен."))
-            elif len(res) > 1:
-                match_list = "\n".join([f"- {r[1]} (отд.{r[2]})" for r in res])
-                return reply_safe(message, wrap_code(
-                    f"🔍 Найдено несколько преподавателей:\n{match_list}\nУточните запрос."))
-
-            teacher_chat_id, target_name, dept, rooms_json = res[0]
-            target_id = json.loads(rooms_json)
-            target_type = 'teacher'
-        elif first in ['каб', 'room', 'кабинет']:
-            room_query = " ".join(tokens[1:]).strip()
-            if not room_query:
-                return reply_safe(message, wrap_code(
-                    "❌ Укажите номер кабинета.\nПример: /stats каб 44"))
-            target_id = [room_query]
-            target_name = f"Кабинет {room_query}"
-            target_type = 'room'
-            mons = monitor_manager.get_user_monitors(message.chat.id)
-            dept = mons[0]['department'] if mons else 1
-        else:
-            group_query = clean_args.upper()
-            clean_query = group_query.replace('-', ' ').replace('_', ' ')
-            group_info = None
-
-            for k, v in GROUP_NAME_TO_ID.items():
-                if clean_query == k.upper().replace('-', ' ') or group_query == k.upper():
-                    group_info = v
-                    target_name = k
-                    break
-            if not group_info:
-                for k, v in GROUP_NAME_TO_ID.items():
-                    if clean_query in k.upper().replace('-', ' ').split():
-                        group_info = v
-                        target_name = k
-                        break
-
-            if group_info:
-                dept, target_id = group_info[0], group_info[1]
-                target_type = 'group'
-            else:
-                return reply_safe(message, wrap_code(
-                    f"❌ Группа или команда '{clean_args}' не распознана."))
-    else:
-        if is_teacher(message.chat.id):
-            dept, rooms = get_teacher_info(message.chat.id)
-            target_id = rooms
-            conn = sqlite3.connect(DB_FILE)
-            row = conn.execute(
-                "SELECT name FROM teachers WHERE chat_id=?",
-                (message.chat.id,
-                 )).fetchone()
-            conn.close()
-            target_name = row[0] if row else "Моя нагрузка"
-            target_type = 'teacher'
-        else:
-            mons = monitor_manager.get_user_monitors(message.chat.id)
-            if mons:
-                dept, target_id = mons[0]['department'], mons[0]['group_id']
-                target_name = mons[0]['group_name']
-                target_type = 'group'
-            else:
-                return show_general_stats_menu(message)
-
-    # Инициализируем контекст сессии для чата
-    stats_context[message.chat.id] = {
-        'target_type': target_type,
-        'target_id': target_id,
-        'target_name': target_name,
-        'dept': dept,
-        'start_date': start_date,
-        'end_date': end_date
-    }
-
-    show_target_stats_menu_by_chat_id(
-        message.chat.id, message.message_thread_id)
 
 
 def show_general_stats_menu(message):
@@ -1673,24 +1343,64 @@ def handle_teacher_approval(call):
     conn.close()
     bot.answer_callback_query(call.id)
 
+def _print_kalich_banner(init_time_sec: float):
+    now_str = datetime.now().strftime('%H:%M:%S')
+    cmd_count = len(command_scanner.commands) if 'command_scanner' in globals() else 0
+    monitors_count = len(monitor_manager.active_monitors) if hasattr(monitor_manager, 'active_monitors') else 0
+    groups_count = len(GROUP_NAME_TO_ID)
+
+    banner = f"""
+  /\\_/\\   ╔══════════════════════════════════════════════════════════════════╗
+ ( o.o )  ║                   🦊 KALICH REBORN PLATFORM 🦊                   ║
+  > ^ <   ║        Модульная система расписания & Telegram-бот          ║
+          ╚══════════════════════════════════════════════════════════════════╝
+
+
+
+  ╭───────────────────────────────⚙️ СИСТЕМА ───────────────────────────────╮
+  │ 🐍 Python        : {sys.version.split()[0]} ({sys.platform})
+  │ 💾 База данных   : {DB_FILE}
+  │ ⏱️ Инициализация : {init_time_sec:.3f} сек.
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  ╭───────────────────────────────📊 СТАТИСТИКА ─────────────────────────────╮
+  │ 📚 Групп в кэше  : {groups_count} групп
+  │ ⚡ Сканировано   : {cmd_count} модульных команд
+  │ 🔔 Подписок      : {monitors_count} активных
+  │ 🛡️ Модераторы    : {len(MODERATOR_IDS)} админ(ов)
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  ╭───────────────────────────────🔄 СЕРВИСЫ ────────────────────────────────╮
+  │ 🟢 [Parser]       Обновление групп (фоновый поток)
+  │ 🟢 [Notifier]     Проверка замен и уведомления
+  │ 🟢 [Broadcast]    Утренние рассылки
+  │ 🟢 [API Server]   REST API Сервер (порт 8000)
+  │ 🟢 [Telegram]     Long-Polling ("бессмертный" режим)
+  ╰──────────────────────────────────────────────────────────────────────────╯
+
+  [{now_str}] 🦊 Калич проснулся, поправил пушистый хвост и готов служить!
+"""
+    print(banner)
+
+
 if __name__ == '__main__':
     load_groups_cache()
     init_db()
     threading.Thread(target=background_group_updater, daemon=True).start()
     threading.Thread(target=check_loop, daemon=True).start()
     threading.Thread(target=morning_broadcast, daemon=True).start()
-    
+
     # Start PWA/API Web Server
     import api_server
     threading.Thread(target=api_server.start_server, daemon=True).start()
-    
+
     init_time = time.perf_counter() - _kalich_start_time
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Инициализация кода и баз данных завершена за {init_time:.3f} сек.")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Бот запущен в бессмертном режиме.")
-    print(f"Групп в кэше: {len(GROUP_NAME_TO_ID)}")
+    _print_kalich_banner(init_time)
+
     while True:
         try:
             bot.polling(non_stop=True, interval=0, timeout=60)
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Polling error: {e}")
             time.sleep(10)
+
