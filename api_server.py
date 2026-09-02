@@ -31,9 +31,15 @@ def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
         print(f"[API] InitData check failed: {e}")
         return None
 
+def get_db():
+    conn = sqlite3.connect(kalich.DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    return conn
+
 # Helper to fetch and cache group lessons
 def get_group_lessons_helper(dept, group_id, day, date_str):
-    conn = sqlite3.connect(kalich.DB_FILE)
+    conn = get_db()
     row = conn.execute(
         "SELECT lessons_text FROM schedule_history WHERE department=? AND group_id=? AND date=?",
         (dept, group_id, date_str)
@@ -129,12 +135,31 @@ async def handle_request_teacher(request):
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
-# Get Groups Cache
+# Health check endpoint
+async def handle_health(request):
+    db_ok = False
+    try:
+        conn = get_db()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        db_ok = True
+    except Exception:
+        pass
+        
+    return web.json_response({
+        'status': 'ok' if db_ok else 'degraded',
+        'database': 'connected' if db_ok else 'error',
+        'groups_count': len(kalich.GROUP_NAME_TO_ID),
+        'timestamp': datetime.now().isoformat()
+    })
+
+# Get Groups Cache (supports dynamic refresh)
 async def handle_groups(request):
-    if not kalich.GROUP_NAME_TO_ID:
-        print("[API] Groups cache is empty. Triggering force update...")
+    force = request.query.get('refresh') in ('1', 'true') or not kalich.GROUP_NAME_TO_ID
+    if force:
+        print("[API] Groups cache refresh requested. Triggering update...")
         import asyncio
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, kalich.update_groups_cache)
     return web.json_response({'groups': kalich.GROUP_NAME_TO_ID})
 
@@ -587,21 +612,43 @@ async def handle_admin_fill(request):
         return web.json_response({'error': str(e)}, status=500)
 
 
-# Static file serving handlers to prevent mime-type mismatches
+# Static file serving handlers (supports active or archived PWA)
+def _find_pwa_file(filename):
+    for base in ['pwa', 'archive/pwa']:
+        p = os.path.join(base, filename)
+        if os.path.exists(p):
+            return p
+    return None
+
 async def serve_index(request):
-    return web.FileResponse('pwa/index.html')
+    f = _find_pwa_file('index.html')
+    if f:
+        return web.FileResponse(f)
+    return web.Response(text="PWA frontend is archived. API is active.", content_type="text/plain")
 
 async def serve_styles(request):
-    return web.FileResponse('pwa/styles.css')
+    f = _find_pwa_file('styles.css')
+    if f:
+        return web.FileResponse(f)
+    return web.Response(text="/* Archived */", content_type="text/css")
 
 async def serve_app_js(request):
-    return web.FileResponse('pwa/app.js')
+    f = _find_pwa_file('app.js')
+    if f:
+        return web.FileResponse(f)
+    return web.Response(text="// Archived", content_type="application/javascript")
 
 async def serve_manifest(request):
-    return web.FileResponse('pwa/manifest.json')
+    f = _find_pwa_file('manifest.json')
+    if f:
+        return web.FileResponse(f)
+    return web.json_response({"name": "Kalich Bot PWA (Archived)"})
 
 async def serve_sw(request):
-    return web.FileResponse('pwa/sw.js')
+    f = _find_pwa_file('sw.js')
+    if f:
+        return web.FileResponse(f)
+    return web.Response(text="// Archived", content_type="application/javascript")
 
 # Ensure dev test teacher is populated
 def ensure_dev_teacher():
@@ -625,6 +672,7 @@ def start_server():
     app = web.Application()
     
     # API endpoints
+    app.router.add_get('/api/health', handle_health)
     app.router.add_post('/api/auth', handle_auth)
     app.router.add_post('/api/auth/request_teacher', handle_request_teacher)
     app.router.add_get('/api/groups', handle_groups)
@@ -649,9 +697,12 @@ def start_server():
     app.router.add_get('/manifest.json', serve_manifest)
     app.router.add_get('/sw.js', serve_sw)
     
-    # Static directory for icons
-    app.router.add_static('/icons', 'pwa/icons')
+    # Static directory for icons (if present)
+    for icon_dir in ['pwa/icons', 'archive/pwa/icons']:
+        if os.path.isdir(icon_dir):
+            app.router.add_static('/icons', icon_dir)
+            break
     
-    port = int(os.getenv('PWA_PORT', 8080))
+    port = int(os.getenv('PWA_PORT', 8000))
     print(f"[API] Starting web app server on http://localhost:{port}")
     web.run_app(app, host='0.0.0.0', port=port, handle_signals=False)

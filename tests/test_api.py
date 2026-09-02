@@ -45,6 +45,7 @@ def api_url(memory_db):
     api_server.ensure_dev_teacher()
     
     app = web.Application()
+    app.router.add_get('/api/health', api_server.handle_health)
     app.router.add_post('/api/auth', api_server.handle_auth)
     app.router.add_get('/api/groups', api_server.handle_groups)
     app.router.add_get('/api/schedule', api_server.handle_schedule)
@@ -262,3 +263,12 @@ def test_api_admin_fill_and_flush_by_department(api_url):
     }
     resp = requests.post(f"{api_url}/api/admin/flush", json=payload_flush)
     assert resp.status_code == 200
+
+def test_api_health(api_url):
+    resp = requests.get(f"{api_url}/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["database"] == "connected"
+    assert data["groups_count"] >= 2
+

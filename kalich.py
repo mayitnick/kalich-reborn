@@ -24,18 +24,14 @@ import telebot
 import urllib3
 import messages
 import requests
-import textwrap
 import threading
 import matplotlib
 import collections
-from gtts import gTTS
 import urllib.request
 from typing import cast, Any
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from pydub import AudioSegment
 from datetime import datetime, timedelta
-from PIL import Image, ImageDraw, ImageFont
 import matplotlib.pyplot as plt  # noqa: E402
 matplotlib.use('Agg')
 
@@ -97,18 +93,6 @@ if teacher_ids_env:
         except ValueError:
             pass
 
-STICKERS = [
-    "CAACAgIAAxkBAAIFPWlzJxrefHjYHVfxp1jM4bAH5fCBAAI-EgACHJpIS7jVPGp6rA90OAQ",
-    "CAACAgIAAxkBAAIFO2lzJw5KN7Oc318wfDczcH5jXt-LAAIYEAAC9ceoSnqmhExiqppbOAQ",
-    "CAACAgIAAxkBAAIFOWlzJuxZZTnMd3fWZy1yiDGTenbCAAKCMwACd7pgSlDQiqr55dnGOAQ",
-    "CAACAgIAAxkBAAIFN2lzJueIxjWq--dVhWItMAiuMqhkAAK7awACj_9gSWki-Q5FMhJNOAQ",
-    "CAACAgIAAxkBAAIFNWlzJq-fO1LI7FnCUpKvKK0zrY-tAAIqdAACObZ5SkKD23F0xtcMOAQ",
-    "CAACAgIAAxkBAAIFM2lzJqWRoOM0ASLL8kXIn0rAJTDaAAKkHwACU3wYSf-GApQlpWnUOAQ",
-    "CAACAgIAAxkBAAIFMWlzJpqVDFpiAwFV2m7zECDzQYe8AAI0FQAChHNJSZuYUiJcpZzcOAQ",
-    "CAACAgIAAxkBAAIFL2lzJpREknMK5mY-RWYZ4a37DVvXAAJAFwACIND5SB9jZK-Yut4vOAQ",
-    "CAACAgIAAxkBAAIFLWlzJpGeyECqq-JDODtv-ewL-XvtAAJ_FwACST_4SJKlVrU6_QE6OAQ"
-]
-
 # Фильтры для удаления системного текста (по отделениям)
 SYSTEM_FILTERS = {
     1: ["Spearhead", "Разработано", "$cript", "Глорис", "Расписание", "γверсия:"],
@@ -126,7 +110,6 @@ CALLS = [
 GROUP_NAME_TO_ID = {}
 GROUP_ID_TO_NAME = {1: {}, 2: {}, 3: {}}
 
-waiting_for_sticker = {}
 waiting_for_department = {}   # chat_id -> ожидание ввода отделения
 # chat_id -> выбранное отделение (после выбора, ожидание группы)
 user_department = {}
@@ -156,6 +139,8 @@ def load_groups_cache():
             build_reverse_group_dict()
         except Exception as e:
             print(f"Error loading groups cache: {e}")
+    if not GROUP_NAME_TO_ID:
+        update_groups_cache()
 
 
 def build_reverse_group_dict():
@@ -169,8 +154,9 @@ def build_reverse_group_dict():
 
 def update_groups_cache():
     global GROUP_NAME_TO_ID
-    new_cache = {}
+    new_cache = dict(GROUP_NAME_TO_ID)
     headers = {'User-Agent': 'Mozilla/5.0'}
+    updated = False
     for dep in [1, 2, 3]:
         url = f"https://xn----{dep}-iddzneycrmpn.xn--p1ai/lesson_table_show/"
         try:
@@ -180,31 +166,87 @@ def update_groups_cache():
                 soup = BeautifulSoup(r.text, "html.parser")
                 for a in soup.find_all("a", href=True):
                     href = str(a['href'])
-                    if '?group_id=' in href:
+                    match = re.search(r'group_id=(\d+)', href)
+                    if match:
                         try:
-                            gid = int(href.split('group_id=')[1].split('&')[0])
-                            # Очистка названия группы от markdown-символов
-                            # (если есть)
+                            gid = int(match.group(1))
                             gname = a.get_text(
-                                strip=True).replace(
-                                '*', '').strip()
-                            if gname and gname not in [
-                                    "ПОНЕДЕЛЬНИК", "ВТОРНИК", "СРЕДА", "ЧЕТВЕРГ", "ПЯТНИЦА", "СУББОТА"]:
-                                # Сохраняем как list для JSON
+                                strip=True).replace('*', '').strip()
+                            if gname and gname.upper() not in [
+                                    "ПОНЕДЕЛЬНИК", "ВТОРНИК", "СРЕДА", "ЧЕТВЕРГ", "ПЯТНИЦА", "СУББОТА", "ВОСКРЕСЕНЬЕ"]:
                                 new_cache[gname] = [dep, gid]
-                        except BaseException:
+                                updated = True
+                        except Exception:
                             continue
         except Exception as e:
             print(f"Update groups cache failed for dep {dep}: {e}")
 
-    if new_cache:
+    if updated or new_cache:
         GROUP_NAME_TO_ID = new_cache
         build_reverse_group_dict()
         try:
+            os.makedirs(os.path.dirname(GROUPS_CACHE_FILE), exist_ok=True)
             with open(GROUPS_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(new_cache, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"Failed to save groups cache: {e}")
+    return GROUP_NAME_TO_ID
+
+
+def get_groups(force_refresh=False):
+    if force_refresh or not GROUP_NAME_TO_ID:
+        update_groups_cache()
+    return GROUP_NAME_TO_ID
+
+
+def find_group_info(target_group):
+    """Динамический поиск группы: точное совпадение, нормализованное, по подстроке.
+    Если группа не найдена в текущем кэше, выполняет запрос к Глорису для поиска новых групп."""
+    if not GROUP_NAME_TO_ID:
+        update_groups_cache()
+
+    target = str(target_group).strip()
+    clean_target = re.sub(r'[\s\-_]+', ' ', target).strip().upper()
+    compact_target = re.sub(r'[\s\-_]+', '', target).upper()
+
+    def _match():
+        # 1. Точное совпадение
+        for k, v in GROUP_NAME_TO_ID.items():
+            if target.upper() == k.upper():
+                return k, v
+        # 2. Нормализованное совпадение (пробелы и дефисы)
+        for k, v in GROUP_NAME_TO_ID.items():
+            k_clean = re.sub(r'[\s\-_]+', ' ', k).strip().upper()
+            if clean_target == k_clean:
+                return k, v
+        # 3. Компактное совпадение (без знаков)
+        for k, v in GROUP_NAME_TO_ID.items():
+            k_compact = re.sub(r'[\s\-_]+', '', k).upper()
+            if compact_target == k_compact:
+                return k, v
+        # 4. По словам
+        for k, v in GROUP_NAME_TO_ID.items():
+            k_clean = re.sub(r'[\s\-_]+', ' ', k).strip().upper()
+            if clean_target in k_clean.split():
+                return k, v
+        return None, None
+
+    k, v = _match()
+    if not v:
+        # Динамически обновляем с Глориса при отсутствии
+        update_groups_cache()
+        k, v = _match()
+    return k, v
+
+
+def get_department_groups(dept):
+    if not GROUP_NAME_TO_ID:
+        update_groups_cache()
+    groups = [k for k, v in GROUP_NAME_TO_ID.items() if v[0] == dept]
+    if not groups:
+        update_groups_cache()
+        groups = [k for k, v in GROUP_NAME_TO_ID.items() if v[0] == dept]
+    return sorted(groups)
 
 
 def background_group_updater():
@@ -218,6 +260,8 @@ def background_group_updater():
 def init_db():
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     # Таблица для стикеров
     conn.execute(
         'CREATE TABLE IF NOT EXISTS item_stickers (chat_id INTEGER, item_key TEXT, sticker_id TEXT, PRIMARY KEY (chat_id, item_key))')
@@ -289,30 +333,11 @@ def init_db():
 
 
 def save_item_sticker(chat_id, item_name, sticker_id):
-    clean_name = re.sub(r'\(?\d{2,4}[А-Яа-я]?\)?', '', item_name).strip()
-    key = re.sub(r'[^а-яА-Яa-zA-ZёЁ]', '', clean_name).lower()
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute(
-        "INSERT OR REPLACE INTO item_stickers VALUES (?, ?, ?)",
-        (chat_id,
-         key,
-         sticker_id))
-    conn.commit()
-    conn.close()
+    pass
 
 
 def get_item_sticker(chat_id, raw_item_name):
-    if not raw_item_name:
-        return None
-    clean_name = re.sub(r'\(?\d{2,4}[А-Яа-я]?\)?', '', raw_item_name).strip()
-    key = re.sub(r'[^а-яА-Яa-zA-ZёЁ]', '', clean_name).lower()
-    conn = sqlite3.connect(DB_FILE)
-    res = conn.execute(
-        "SELECT sticker_id FROM item_stickers WHERE chat_id=? AND item_key=?",
-        (chat_id,
-         key)).fetchone()
-    conn.close()
-    return res[0] if res else None
+    return None
 
 
 def save_schedule_to_db(department, group_id, day,
@@ -1604,253 +1629,6 @@ def reply_safe(message, text, parse_mode='Markdown'):
     except BaseException:
         pass
 
-# ====== ФУНКЦИИ ДЛЯ СОЗДАНИЯ СТИКЕРОВ ======
-
-
-def get_sticker_font(name, size):
-    fonts = {'s1': 'bold.ttf', 's2': 'soft.ttf', 's3': 'cursive.ttf'}
-    f_file = fonts.get(name, 'bold.ttf')
-    if os.path.exists(f_file):
-        return ImageFont.truetype(f_file, size)
-    return ImageFont.load_default()
-
-
-def create_custom_sticker(text, command, author=None):
-    size = 512
-    bg_color = (40, 40, 40, 255) if author else (255, 255, 255, 0)
-    img = Image.new('RGBA', (size, size), bg_color)
-    draw = ImageDraw.Draw(img)
-
-    if author:
-        text = f"«{text}»"
-    lines = textwrap.wrap(
-        text, width=15 if command in [
-            's_fire', 's_blood'] else 18)
-    display_text = "\n".join(lines)
-    if author:
-        display_text += f"\n\n— {author}"
-
-    f_size = 100
-    f_name = command if command in ['s1', 's2', 's3'] else 's1'
-    font = get_sticker_font(f_name, f_size)
-
-    while f_size > 20:
-        bbox = draw.multiline_textbbox(
-            (0, 0), display_text, font=font, align="center", spacing=10)
-        if (bbox[2] - bbox[0]) < size - \
-                80 and (bbox[3] - bbox[1]) < size - 100:
-            break
-        f_size -= 5
-        font = get_sticker_font(f_name, f_size)
-
-    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    pos = ((size - w) / 2, (size - h) / 2)
-
-    if command == 's_fire':
-        draw.multiline_text(
-            pos,
-            display_text,
-            fill="black",
-            font=font,
-            stroke_width=10,
-            align="center",
-            spacing=10)
-        draw.multiline_text(
-            pos,
-            display_text,
-            fill="#FF4500",
-            font=font,
-            align="center",
-            spacing=10)
-        draw.multiline_text(
-            (pos[0],
-             pos[1] - 3),
-            display_text,
-            fill="#FFD700",
-            font=font,
-            align="center",
-            spacing=10)
-    elif command == 's_blood':
-        for offset in range(8, 0, -2):
-            draw.multiline_text(
-                (pos[0],
-                 pos[1] + offset),
-                display_text,
-                fill="#8B0000",
-                font=font,
-                align="center",
-                spacing=10)
-        draw.multiline_text(
-            pos,
-            display_text,
-            fill="#FF0000",
-            font=font,
-            stroke_width=2,
-            stroke_fill="black",
-            align="center",
-            spacing=10)
-    elif command == 's_glitch':
-        draw.multiline_text(
-            (pos[0] - 4,
-             pos[1]),
-            display_text,
-            fill="#00FFFF",
-            font=font,
-            align="center",
-            spacing=10)
-        draw.multiline_text(
-            (pos[0] + 4,
-             pos[1]),
-            display_text,
-            fill="#FF00FF",
-            font=font,
-            align="center",
-            spacing=10)
-        draw.multiline_text(
-            pos,
-            display_text,
-            fill="white",
-            font=font,
-            align="center",
-            spacing=10)
-    else:
-        draw.multiline_text(
-            pos,
-            display_text,
-            fill="white",
-            font=font,
-            stroke_width=8 if not author else 0,
-            stroke_fill="black",
-            align="center",
-            spacing=10)
-
-    buf = io.BytesIO()
-    img.save(buf, format='WEBP')
-    buf.seek(0)
-    return buf
-
-
-# ====== ФУНКЦИИ ДЛЯ ОБРАБОТКИ АУДИО ======
-LANGUAGES = {
-    'ru': 'Русский', 'en': 'Английский', 'de': 'Немецкий', 'fr': 'Французский',
-    'es': 'Испанский', 'it': 'Итальянский', 'pt': 'Португальский', 'nl': 'Голландский',
-    'pl': 'Польский', 'uk': 'Украинский', 'be': 'Белорусский', 'cs': 'Чешский',
-    'sk': 'Словацкий', 'bg': 'Болгарский', 'sr': 'Сербский', 'hr': 'Хорватский',
-    'sl': 'Словенский', 'lt': 'Литовский', 'lv': 'Латышский', 'et': 'Эстонский',
-    'ro': 'Румынский', 'hu': 'Венгерский', 'el': 'Греческий', 'da': 'Датский',
-    'sv': 'Шведский', 'no': 'Норвежский', 'fi': 'Финский', 'is': 'Исландский',
-    'zh-cn': 'Китайский (упрощ.)', 'zh-tw': 'Китайский (трад.)', 'ja': 'Японский',
-    'ko': 'Корейский', 'vi': 'Вьетнамский', 'th': 'Тайский', 'id': 'Индонезийский',
-    'ms': 'Малайский', 'tl': 'Тагальский', 'km': 'Кхмерский', 'lo': 'Лаосский',
-    'my': 'Бирманский', 'mn': 'Монгольский', 'ne': 'Непальский', 'si': 'Сингальский',
-    'hi': 'Хинди', 'bn': 'Бенгальский', 'ta': 'Тамильский', 'te': 'Телугу',
-    'mr': 'Маратхи', 'gu': 'Гуджарати', 'kn': 'Каннада', 'ml': 'Малаялам',
-    'pa': 'Панджаби', 'ur': 'Урду', 'sa': 'Санскрит',
-    'ar': 'Арабский', 'he': 'Иврит', 'fa': 'Персидский', 'tr': 'Турецкий',
-    'ku': 'Курдский', 'ps': 'Пушту', 'dv': 'Дивехи',
-    'sw': 'Суахили', 'ha': 'Хауса', 'ig': 'Игбо', 'yo': 'Йоруба',
-    'am': 'Амхарский', 'ti': 'Тигринья', 'om': 'Оромо', 'sn': 'Шона',
-    'st': 'Сесото', 'tn': 'Тсвана', 'xh': 'Коса', 'zu': 'Зулу',
-    'af': 'Африкаанс', 'mg': 'Малагасийский',
-    'ca': 'Каталанский', 'gl': 'Галисийский', 'eu': 'Баскский',
-    'cy': 'Валлийский', 'gd': 'Шотландский', 'ga': 'Ирландский',
-    'mt': 'Мальтийский', 'lb': 'Люксембургский',
-    'hy': 'Армянский', 'ka': 'Грузинский', 'az': 'Азербайджанский',
-    'kk': 'Казахский', 'ky': 'Киргизский', 'uz': 'Узбекский',
-    'tg': 'Таджикский', 'tk': 'Туркменский', 'bs': 'Боснийский',
-    'mk': 'Македонский', 'sq': 'Албанский', 'la': 'Латынь',
-}
-
-RUSSIAN_TO_CODE = {v.lower(): k for k, v in LANGUAGES.items()}
-RUSSIAN_TO_CODE.update({
-    'россия': 'ru', 'рф': 'ru', 'рус': 'ru',
-    'сша': 'en', 'usa': 'en', 'америка': 'en', 'англия': 'en',
-    'германия': 'de', 'франция': 'fr', 'италия': 'it',
-    'испания': 'es', 'португалия': 'pt', 'польша': 'pl',
-    'украина': 'uk', 'беларусь': 'be', 'белоруссия': 'be',
-    'чехия': 'cs', 'словакия': 'sk', 'болгария': 'bg',
-    'сербия': 'sr', 'хорватия': 'hr', 'словения': 'sl',
-    'литва': 'lt', 'латвия': 'lv', 'эстония': 'et',
-    'румыния': 'ro', 'венгрия': 'hu', 'греция': 'el',
-    'дания': 'da', 'швеция': 'sv', 'норвегия': 'no',
-    'финляндия': 'fi', 'исландия': 'is', 'нидерланды': 'nl',
-    'китай': 'zh-cn', 'япония': 'ja', 'корея': 'ko',
-    'вьетнам': 'vi', 'таиланд': 'th', 'индонезия': 'id',
-    'индия': 'hi', 'арабские': 'ar', 'турция': 'tr',
-    'израиль': 'he', 'казахстан': 'kk', 'грузия': 'ka',
-    'армения': 'hy', 'азербайджан': 'az', 'узбекистан': 'uz',
-    'киргизия': 'ky', 'таджикистан': 'tg', 'туркмения': 'tk',
-    'монголия': 'mn', 'египет': 'ar', 'оаэ': 'ar'
-})
-
-
-def get_language_code(text):
-    if not text:
-        return None
-    clean = text.lower().strip()
-    if clean in LANGUAGES:
-        return clean
-    return RUSSIAN_TO_CODE.get(clean)
-
-
-def process_audio_effects(voice_io, effect=None):
-    try:
-        song: Any = AudioSegment.from_file(voice_io, format="mp3")
-        if effect == "chip":
-            new_sample_rate = int(song.frame_rate * 1.5)
-            song = song._spawn(
-                song.raw_data, overrides={
-                    'frame_rate': new_sample_rate})
-            song = song.set_frame_rate(44100)
-        elif effect == "demon":
-            new_sample_rate = int(song.frame_rate * 0.7)
-            song = song._spawn(
-                song.raw_data, overrides={
-                    'frame_rate': new_sample_rate})
-            song = song.set_frame_rate(44100)
-        elif effect == "echo":
-            echo = song - 10
-            song = song.overlay(
-                echo, position=200).overlay(
-                echo - 5, position=400)
-        elif effect == "robot":
-            combined = song
-            for i in range(1, 5):
-                delayed = song - (i * 3)
-                combined = combined.overlay(delayed, position=i * 150)
-            song = combined
-        elif effect == "radio":
-            song = song.high_pass_filter(1500).low_pass_filter(3000) + 5
-        elif effect == "vibe":
-            chunk_size = 100
-            chunks = []
-            for i in range(0, len(song), chunk_size):
-                chunk = song[i:i + chunk_size]
-                if (i // chunk_size) % 2 == 0:
-                    chunks.append(chunk - 10)
-                else:
-                    chunks.append(chunk)
-            if chunks:
-                song = chunks[0]
-                for chunk in chunks[1:]:
-                    song += chunk
-        elif effect == "reverb":
-            reverb = song - 15
-            for i in range(1, 4):
-                reverb_part = reverb - (i * 2)
-                song = song.overlay(reverb_part, position=i * 100)
-        elif effect == "fast":
-            song = song.speedup(playback_speed=1.5)
-        elif effect == "slow":
-            song = song.speedup(playback_speed=0.7)
-        out_io = io.BytesIO()
-        song.export(out_io, format="ogg", codec="libopus")
-        out_io.seek(0)
-        return out_io
-    except Exception as e:
-        print(f"Pydub error: {e}")
-        voice_io.seek(0)
-        return voice_io
 
 # ====== ФУНКЦИЯ ОТПРАВКИ УВЕДОМЛЕНИЙ ======
 
@@ -1956,25 +1734,6 @@ def ad_and_execute(message):
         cmd_stats(message)
 
 
-@bot.message_handler(commands=['cs'])
-def cmd_clear_stickers(message):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        conn.execute(
-            "DELETE FROM item_stickers WHERE chat_id = ?", (message.chat.id,))
-        conn.commit()
-        conn.close()
-        bot.send_message(
-            message.chat.id,
-            "✅ Все привязки стикеров в этом чате удалены.")
-        bot.send_message(
-            message.chat.id,
-            "Подписывайтесь на @kalichoctu",
-            message_thread_id=message.message_thread_id)
-    except Exception as e:
-        reply_safe(message, wrap_code(f"Ошибка при очистке: {e}"))
-
-
 def _render_schedule_msg(message, monitor, all_data,
                          day, header_text, send_stickers=False):
     key = (monitor['department'], monitor['group_id'])
@@ -1982,19 +1741,6 @@ def _render_schedule_msg(message, monitor, all_data,
     if not lessons:
         return reply_safe(message, wrap_code(
             f"{header_text}\n\nНет пар или данных."))
-
-    if send_stickers:
-        sent_stickers = set()
-        for l_raw in lessons:
-            stk = get_item_sticker(message.chat.id, str(l_raw))
-            if stk and stk not in sent_stickers:
-                bot.send_sticker(
-                    message.chat.id,
-                    stk,
-                    message_thread_id=message.message_thread_id)
-                sent_stickers.add(stk)
-        if not sent_stickers:
-            pass
 
     res = f"{header_text}\n\n"
     cnt = 1
@@ -2038,10 +1784,6 @@ def cmd_r_today(message):
             day,
             f"📅 Сегодня: {m['group_name']}",
             send_stickers=True)
-
-    settings = get_user_settings(message.chat.id)
-    if settings.get('voice_alerts'):
-        cmd_r_voice(message)
 
 
 @bot.message_handler(regexp=r'^/db(\s+.*)?$')
@@ -2142,14 +1884,6 @@ def cmd_now(message):
     lessons = all_data.get(key)
     if lessons and len(lessons) > idx:
         curr_l_raw = lessons[idx]
-        stk = get_item_sticker(message.chat.id, str(curr_l_raw))
-        if stk:
-            bot.send_sticker(
-                message.chat.id,
-                stk,
-                message_thread_id=message.message_thread_id)
-        else:
-            pass
         def clean_n(t): return re.sub(
             r'\(?\d{2,4}[А-Яа-я]?\)?', '', str(t)).strip().lower()
         target_n = clean_n(curr_l_raw)
@@ -2236,23 +1970,6 @@ def cmd_mem(message):
         reply_safe(message, wrap_code(f"Успех.\n{old} -> {new}"))
     except BaseException:
         reply_safe(message, wrap_code("Ошибка."))
-
-
-@bot.message_handler(commands=['setsticker'])
-def cmd_setsticker(message):
-    item_name = message.text.replace('/setsticker', '').strip()
-    if not item_name:
-        return reply_safe(message, "⚠️ Введите название предмета.")
-    waiting_for_sticker[message.chat.id] = item_name
-    reply_safe(message, f"🎯 Предмет '{item_name}' выбран. Отправь стикер.")
-
-
-@bot.message_handler(content_types=['sticker'])
-def handle_sticker_save(message):
-    if message.chat.id in waiting_for_sticker:
-        item = waiting_for_sticker.pop(message.chat.id)
-        save_item_sticker(message.chat.id, item, message.sticker.file_id)
-        reply_safe(message, f"✅ Стикер привязан к '{item}'!")
 
 
 @bot.message_handler(commands=['list'])
@@ -2367,13 +2084,12 @@ def cmd_move(message):
 
     # Остаток — возможно название группы
     if remaining:
-        group_str = ' '.join(remaining).upper()
-        for k, v in GROUP_NAME_TO_ID.items():
-            if group_str == k.upper() or group_str == k.upper().replace('-', ' '):
-                dept = v[0]  # Изменяем отделение на отделение найденной группы!
-                group_id = v[1]
-                break
-        if group_id == -1 and remaining:
+        group_str = ' '.join(remaining)
+        matched_name, group_info = find_group_info(group_str)
+        if group_info:
+            dept = group_info[0]
+            group_id = group_info[1]
+        else:
             return reply_safe(message, wrap_code(
                 f"❌ Группа '{group_str}' не найдена."))
 
@@ -2431,205 +2147,6 @@ def cmd_move(message):
     reply_safe(message, wrap_code("\n".join(conf)))
 
 
-@bot.message_handler(commands=['s', 's1', 's2',
-                     's3', 's_fire', 's_blood', 's_glitch'])
-def cmd_text_to_sticker(message):
-    cmd = message.text.split()[0][1:]
-    if cmd == 's':
-        cmd = 's1'
-    parts = message.text.split(maxsplit=1)
-    text = parts[1] if len(parts) > 1 else ""
-    author = None
-    if not text and message.reply_to_message and message.reply_to_message.text:
-        text = message.reply_to_message.text
-        u = message.reply_to_message.from_user
-        author = f"@{u.username}" if u.username else u.first_name
-    if not text:
-        return reply_safe(message, "Напиши текст или ответь на сообщение!")
-    bot.send_chat_action(message.chat.id, 'choose_sticker')
-    try:
-        sticker = create_custom_sticker(text, cmd, author)
-        bot.send_sticker(
-            message.chat.id,
-            sticker,
-            message_thread_id=message.message_thread_id)
-    except Exception as e:
-        reply_safe(message, f"❌ Ошибка: {e}")
-
-
-@bot.message_handler(commands=['gs'])
-def cmd_gs(message):
-    args = message.text.split(maxsplit=2)
-    effect = None
-    lang = 'ru'
-    text = ""
-    known_effects = [
-        'chip',
-        'demon',
-        'echo',
-        'robot',
-        'radio',
-        'vibe',
-        'slow',
-        'fast',
-        'reverb']
-
-    if message.reply_to_message and (
-            message.reply_to_message.text or message.reply_to_message.caption):
-        text = message.reply_to_message.text or message.reply_to_message.caption
-        if len(args) > 1:
-            val = args[1].lower()
-            if val in known_effects:
-                effect = val
-            else:
-                code = get_language_code(val)
-                if code:
-                    lang = code
-                elif val == 'slow':
-                    effect = 'slow'
-    else:
-        if len(args) < 2:
-            popular_langs = ['русский', 'английский', 'немецкий', 'французский',
-                             'испанский', 'китайский', 'японский', 'арабский']
-            popular_effects = ['robot', 'demon', 'radio', 'fast']
-            reply_text = (
-                "🎤 *Голосовой синтезатор*\n\n"
-                "`/gs [эффект] текст` – озвучить текст\n"
-                "`/gs [страна] текст` – выбрать язык\n\n"
-                "*Примеры:*\n"
-                "`/gs robot Привет`\n"
-                "`/gs английский Hello`\n"
-                "`/gs китайский 你好`\n"
-                "Ответь на сообщение: `/gs японский`\n\n"
-                f"*Популярные языки:* {', '.join(popular_langs)}\n"
-                f"*Эффекты:* {', '.join(popular_effects)}, slow, vibe, reverb\n\n"
-                "📚 *Все языки:* используй /langs для полного списка"
-            )
-            return reply_safe(message, reply_text, parse_mode="Markdown")
-
-        val = args[1].lower()
-        if val in known_effects:
-            effect = val
-            text = args[2] if len(args) > 2 else ""
-        else:
-            code = get_language_code(val)
-            if code:
-                lang = code
-                text = args[2] if len(args) > 2 else ""
-            else:
-                text = message.text.replace('/gs', '', 1).strip()
-
-    if not text:
-        return reply_safe(message, "❌ Текст не найден.")
-
-    try:
-        bot.send_chat_action(
-            message.chat.id,
-            'record_audio',
-            message_thread_id=message.message_thread_id)
-        lang_name = LANGUAGES.get(lang, lang)
-        tts = gTTS(text=text[:500], lang=lang, slow=False)
-        temp_io = io.BytesIO()
-        tts.write_to_fp(temp_io)
-        temp_io.seek(0)
-        final_voice = process_audio_effects(temp_io, effect=effect)
-        caption = f"🗣 {lang_name}"
-        if effect:
-            caption += f" + эффект {effect}"
-        bot.send_voice(
-            message.chat.id,
-            final_voice,
-            caption=caption,
-            reply_to_message_id=message.message_id,
-            message_thread_id=message.message_thread_id
-        )
-    except Exception as e:
-        error_msg = f"❌ Ошибка: {e}"
-        if "lang" in str(e).lower():
-            error_msg += f"\nЯзык '{lang}' может не поддерживаться. Попробуй другой."
-        reply_safe(message, error_msg)
-
-
-@bot.message_handler(commands=['langs'])
-def cmd_langs(message):
-    regions = {
-        '🇪🇺 Европа': ['ru', 'en', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'uk', 'be', 'cs', 'sk', 'bg', 'sr', 'hr', 'sl', 'lt', 'lv', 'et', 'ro', 'hu', 'el', 'da', 'sv', 'no', 'fi', 'is', 'ca', 'gl', 'eu', 'cy', 'gd', 'ga', 'mt', 'lb'],
-        '🇷🇺 СНГ': ['ru', 'uk', 'be', 'kk', 'ky', 'uz', 'tg', 'tk', 'hy', 'ka', 'az'],
-        '🇨🇳 Азия': ['zh-cn', 'zh-tw', 'ja', 'ko', 'vi', 'th', 'id', 'ms', 'tl', 'km', 'lo', 'my', 'mn', 'ne'],
-        '🇮🇳 Индия': ['hi', 'bn', 'ta', 'te', 'mr', 'gu', 'kn', 'ml', 'pa', 'ur', 'sa'],
-        '🌍 Ближний Восток': ['ar', 'he', 'fa', 'tr', 'ku', 'ps', 'dv'],
-        '🌍 Африка': ['sw', 'ha', 'ig', 'yo', 'am', 'ti', 'om', 'sn', 'st', 'tn', 'xh', 'zu', 'af', 'mg'],
-    }
-    text = "📚 *Все доступные языки:*\n\n"
-    for region, codes in regions.items():
-        text += f"{region}\n"
-        lang_list = []
-        for code in codes:
-            if code in LANGUAGES:
-                lang_list.append(f"{LANGUAGES[code]} (`{code}`)")
-        text += " • " + "\n • ".join(lang_list[:5])
-        if len(lang_list) > 5:
-            text += f"\n • ... и ещё {len(lang_list)-5}"
-        text += "\n\n"
-    text += "💡 *Как использовать:*\n"
-    text += "`/gs французский Привет`\n"
-    text += "`/gs японский こんにちは`"
-    reply_safe(message, text, parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['r_voice'])
-def cmd_r_voice(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    day = datetime.now().isoweekday()
-    if day > 5:
-        return reply_safe(message, "Хм, в выходные я тоже отдыхаю, а ты? >w<")
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    if not mons:
-        return reply_safe(message, "❌ Нет активных подписок.")
-    all_day_data = get_all_schedules_for_day(day)
-    for m in mons:
-        key = (m['department'], m['group_id'])
-        lessons = all_day_data.get(key)
-        if not lessons:
-            continue
-        text = f"Расписание на сегодня для группы {m['group_name']}. "
-        for i, l in enumerate(lessons):
-            lines = format_with_overlap(
-                message.chat.id,
-                m['department'],
-                m['group_id'],
-                day,
-                i,
-                str(l),
-                all_day_data)
-            if lines:
-                subject = re.sub(r'\(.*?\)', '', lines[0]).strip()
-                text += f"Пара {i+1}: {subject}. "
-        try:
-            bot.send_chat_action(
-                message.chat.id,
-                'record_audio',
-                message_thread_id=message.message_thread_id)
-            settings = get_user_settings(message.chat.id)
-            tts = gTTS(text=text, lang='ru')
-            temp_io = io.BytesIO()
-            tts.write_to_fp(temp_io)
-            temp_io.seek(0)
-
-            # Использовать выбранный эффект из настроек
-            chosen_effect = settings.get('voice_effect', 'echo')
-            final_voice = process_audio_effects(
-                temp_io, effect=chosen_effect if chosen_effect != 'none' else None)
-            bot.send_voice(
-                message.chat.id,
-                final_voice,
-                message_thread_id=message.message_thread_id)
-        except Exception as e:
-            reply_safe(
-                message,
-                f"❌ Ошибка при генерации голосового расписания: {e}")
-
-
 @bot.message_handler(commands=['flush'])
 def cmd_flush(message):
     if message.from_user.id in MODERATOR_IDS:
@@ -2638,22 +2155,6 @@ def cmd_flush(message):
         conn.commit()
         conn.close()
         reply_safe(message, "♻️ База очищена.")
-
-
-hdxvhgv = 'CAACAgIAAxkBAAIJ-mmMschzUfv2_1N4Y0ML4VqTgt9LAAICnAAChC1oSPR48gzQTUpZOgQ'
-
-
-@bot.message_handler(commands=['clear'])
-def handle_clear(message):
-    try:
-        for _ in range(4):
-            bot.send_sticker(
-                message.chat.id,
-                hdxvhgv,
-                message_thread_id=message.message_thread_id)
-            time.sleep(0.3)
-    except Exception as e:
-        print(f"Ошибка: {e}")
 
 
 @bot.message_handler(commands=['start'])
@@ -2869,7 +2370,7 @@ def cmd_cancel(message):
     cid = message.chat.id
     canceled = False
     for d in (waiting_for_department, user_department, waiting_for_teacher_dept,
-              waiting_for_teacher_rooms, waiting_for_sticker, waiting_for_stats_dates):
+              waiting_for_teacher_rooms, waiting_for_stats_dates):
         if cid in d:
             del d[cid]
             canceled = True
@@ -2985,14 +2486,6 @@ def cmd_next(message):
         data,
         idx)
     if info:
-        stk = get_item_sticker(message.chat.id, str(info['raw_name']))
-        if stk:
-            bot.send_sticker(
-                message.chat.id,
-                stk,
-                message_thread_id=message.message_thread_id)
-        else:
-            send_random_sticker(message)
         res = (
             f"Далее: {info['name']}\n"
             f"Длительность: {format_lessons_count(info['count'])}\n"
@@ -3113,26 +2606,11 @@ def cmd_find_by_group(message):
             "Ошибка: введите группу.\nПример: /w ИС-41-22"))
 
     clean_target = target_group.replace('-', ' ').replace('_', ' ')
-    group_info = None
-
-    # Ищем точное совпадение
-    for k, v in GROUP_NAME_TO_ID.items():
-        if clean_target == k.upper().replace('-', ' ').replace('_', ' '):
-            group_info = v
-            target_group = k
-            break
-
-    # Если не нашли, ищем по вхождению
-    if not group_info:
-        for k, v in GROUP_NAME_TO_ID.items():
-            if clean_target in k.upper().replace('-', ' ').replace('_', ' ').split():
-                group_info = v
-                target_group = k
-                break
-
+    matched_name, group_info = find_group_info(target_group)
     if not group_info:
         return reply_safe(message, wrap_code(
             f"Группа {target_group} не найдена."))
+    target_group = matched_name
     department, gid = group_info[0], group_info[1]
 
     day = datetime.now().isoweekday()
@@ -3299,12 +2777,11 @@ def process_start_role_selection(chat_id, text, message_thread_id=None):
         if chat_id in waiting_for_department:
             del waiting_for_department[chat_id]
         dept = int(text)
-        groups = [k for k, v in GROUP_NAME_TO_ID.items() if v[0] == dept]
+        groups = get_department_groups(dept)
         bot.send_message(
             chat_id,
             f"Выбрано отделение {dept}. Введите название группы:\n\n" +
-            "\n".join(
-                sorted(groups)),
+            "\n".join(groups),
             message_thread_id=message_thread_id)
     else:
         bot.send_message(
@@ -3444,17 +2921,12 @@ def handle_all(message):
         dept = user_department[chat_id]
         input_group = text.upper()
         clean_input = input_group.replace('-', ' ').replace('_', ' ')
-        found_name = None
+        found_name, group_info = find_group_info(input_group)
         found_gid = None
-        # Сначала ищем точное совпадение
-        for k, v in GROUP_NAME_TO_ID.items():
-            if v[0] == dept and (clean_input == k.upper().replace(
-                    '-', ' ') or input_group == k.upper()):
-                found_name = k
-                found_gid = v[1]
-                break
-        # Если не нашли — ищем по частичному вхождению
-        if not found_name:
+        if group_info and group_info[0] == dept:
+            found_gid = group_info[1]
+        else:
+            found_name = None
             for k, v in GROUP_NAME_TO_ID.items():
                 if v[0] == dept and (clean_input in k.upper().replace(
                         '-', ' ') or input_group in k.upper()):
@@ -3462,7 +2934,7 @@ def handle_all(message):
                     found_gid = v[1]
                     break
 
-        if found_name:
+        if found_name and found_gid:
             mid = f"{chat_id}_{dept}_{found_gid}"
             monitor_manager.active_monitors[mid] = {
                 "chat_id": chat_id, "group_id": found_gid,
@@ -3473,26 +2945,24 @@ def handle_all(message):
             del user_department[chat_id]
             reply_safe(message, f"✅ {found_name} (отделение {dept}) активна!")
         else:
-            groups = [k for k, v in GROUP_NAME_TO_ID.items() if v[0] == dept]
+            groups = get_department_groups(dept)
             bot.send_message(
                 chat_id,
                 "Группа не найдена. Список:\n" +
-                "\n".join(
-                    sorted(groups)))
+                "\n".join(groups))
         return
 
-    clean_text = text.upper().replace('-', ' ').replace('_', ' ')
-    for k, v in GROUP_NAME_TO_ID.items():
-        if clean_text == k.upper().replace('-', ' ') or text.upper() == k.upper():
-            dept, gid = v[0], v[1]
-            mid = f"{chat_id}_{dept}_{gid}"
-            monitor_manager.active_monitors[mid] = {
-                "chat_id": chat_id, "group_id": gid,
-                "group_name": k, "department": dept,
-                "message_thread_id": getattr(message, 'message_thread_id', None)
-            }
-            monitor_manager.save()
-            return reply_safe(message, f"✅ {k} активна!")
+    matched_k, group_info = find_group_info(text)
+    if group_info:
+        dept, gid = group_info[0], group_info[1]
+        mid = f"{chat_id}_{dept}_{gid}"
+        monitor_manager.active_monitors[mid] = {
+            "chat_id": chat_id, "group_id": gid,
+            "group_name": matched_k, "department": dept,
+            "message_thread_id": getattr(message, 'message_thread_id', None)
+        }
+        monitor_manager.save()
+        return reply_safe(message, f"✅ {matched_k} активна!")
 
     if chat_id != LOG_GROUP_ID:
         try:
