@@ -89,6 +89,8 @@ class _KalichModuleWrapper(sys.modules[__name__].__class__):
         elif name == 'bot':
             src.bot.instance.bot = value
             src.services.notifier.bot = value
+            if 'service_container' in globals():
+                service_container.bot = value
 
 sys.modules[__name__].__class__ = _KalichModuleWrapper
 
@@ -100,6 +102,14 @@ def update_groups_cache():
         kalich_mod.__dict__['GROUP_NAME_TO_ID'] = src.services.parser.GROUP_NAME_TO_ID
         kalich_mod.__dict__['GROUP_ID_TO_NAME'] = src.services.parser.GROUP_ID_TO_NAME
     return res
+
+# ====== ИНИЦИАЛИЗАЦИЯ КОНТЕЙНЕРА И СИСТЕМЫ КОМАНД ======
+from src.core.container import ServiceContainer, AppContext
+from src.core.scanner import CommandScanner
+
+service_container = ServiceContainer(bot=bot)
+command_scanner = CommandScanner(service_container)
+command_scanner.scan_and_register("src/bot/commands")
 
 # ====== КОМАНДЫ ======
 

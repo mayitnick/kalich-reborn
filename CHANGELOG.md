@@ -9,7 +9,13 @@
 - Эндпоинт проверки здоровья `/api/health` для мониторинга статуса базы данных и количества спарсенных групп.
 - Режим SQLite WAL (`PRAGMA journal_mode=WAL;`) и `PRAGMA busy_timeout = 5000;` в `kalich.py` и `api_server.py` для устранения блокировок при многопоточных запросах.
 - Параметр `?refresh=true` для эндпоинта `/api/groups`.
-- Unit-тесты для динамического парсера и эндпоинта `/api/health`.
+- Модульная система команд и внедрения зависимостей (Dependency Injection):
+  - Пакет `src/core/` (`ServiceContainer`, `AppContext`, `BaseCommand`, `command`, `CommandScanner`).
+  - Полное автодополнение типов (IDE type hints) для всех методов сервисов (`ctx.db`, `ctx.parser`, `ctx.analytics`, `ctx.notifier`, `ctx.config`, `ctx.bot`).
+  - Автоматическое сканирование каталога `src/bot/commands/` и валидация объявленных зависимостей (`requires`).
+  - Поддержка слэш-команд, текстовых алиасов, regex-шаблонов и медиа-хэндлеров (фото, документы, аудио).
+  - Подробное руководство по созданию команд и расширению контейнера: `docs/COMMAND_SYSTEM.md`.
+- Unit-тесты для динамического парсера, эндпоинта `/api/health` и системы команд с DI (`tests/test_command_system.py`).
 
 ### Changed
 - Архитектурный рефакторинг монолита `kalich.py` в модульную структуру `src/`:
