@@ -18,7 +18,7 @@ services:
     container_name: kalich_backend
     restart: always
     ports:
-      - "8000:8000"
+      - "8999:8999"
     env_file: .env
     volumes:
       - ./data:/app/data

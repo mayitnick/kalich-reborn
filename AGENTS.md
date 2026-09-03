@@ -16,7 +16,7 @@ Kalich Reborn is a high-performance, modular Telegram bot and REST API platform 
   - `src/config.py`: Environment variables and system constants.
   - `src/database.py`: SQLite DAL with WAL mode, busy timeout, and monitor/custom name managers.
 - `kalich.py`: Bot entrypoint and backward-compatibility facade (re-exports symbols and synchronizes module state).
-- `api_server.py`: Async REST API on `aiohttp` (port 8000).
+- `api_server.py`: Async REST API on `aiohttp` (port 8999).
 - `data/`: Local persistent storage (`schedules.db`, JSON caches).
 - `tests/`: Automated unit tests using `pytest` and `unittest.mock`.
 - `archive/`: Archived PWA frontend (`pwa/`, `pwa.tar.gz`) preserved for historical reference. DO NOT delete or re-enable without explicit user request.

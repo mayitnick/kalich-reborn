@@ -1374,7 +1374,7 @@ def _print_kalich_banner(init_time_sec: float):
   │ 🟢 [Parser]       Обновление групп (фоновый поток)
   │ 🟢 [Notifier]     Проверка замен и уведомления
   │ 🟢 [Broadcast]    Утренние рассылки
-  │ 🟢 [API Server]   REST API Сервер (порт 8000)
+  │ 🟢 [API Server]   REST API Сервер (порт 8999)
   │ 🟢 [Telegram]     Long-Polling ("бессмертный" режим)
   ╰──────────────────────────────────────────────────────────────────────────╯
 

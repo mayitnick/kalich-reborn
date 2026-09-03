@@ -52,7 +52,7 @@
 ┌─────────────────────────┐     ┌──────────────────────────┐
 │      Telegram Bot       │     │        REST API          │
 │       (kalich.py)       │     │     (api_server.py)      │
-│  pyTelegramBotAPI :long │     │      aiohttp :8000       │
+│  pyTelegramBotAPI :long │     │      aiohttp :8999       │
 └────────────┬────────────┘     └────────────┬─────────────┘
              │                               │
              ▼                               ▼
@@ -152,7 +152,7 @@ cp .env.example .env
 BOT_TOKEN=123456789:ABCdefGHIjklMNOprstUVWXYZ       # Токен бота
 MODERATOR_ID=123456789                              # Telegram ID администратора
 LOG_GROUP_ID=-1001234567890                         # (Опционально) ID группы для пересылки сообщений
-PWA_PORT=8000                                       # Порт REST API сервера
+PWA_PORT=8999                                       # Порт REST API сервера
 ```
 
 ### 4. Запуск
@@ -165,7 +165,7 @@ python3 kalich.py
 **Запуск REST API сервера:**
 ```bash
 python3 api_server.py
-# Сервер запустится на http://localhost:8000
+# Сервер запустится на http://localhost:8999
 ```
 
 > **Примечание**: При первом запуске каталог `data/` и файл базы данных `data/schedules.db` будут созданы автоматически с оптимизированными настройками WAL.
@@ -181,14 +181,14 @@ python3 api_server.py
 docker compose up -d --build
 ```
 
-- Контейнер `kalich_backend` пробрасывает порт `8000:8000`.
+- Контейнер `kalich_backend` пробрасывает порт `8999:8999`.
 - Персистентные данные базы и кэша сохраняются в томе `./data:/app/data`.
 
 ---
 
 ## 🔌 REST API Reference
 
-Базовый URL: `http://localhost:8000`
+Базовый URL: `http://localhost:8999`
 
 ### Состояние и мониторинг
 | Метод | Эндпоинт | Параметры | Описание |
