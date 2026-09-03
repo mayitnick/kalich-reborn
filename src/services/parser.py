@@ -18,8 +18,38 @@ def requests_get_no_proxy(*args, **kwargs):
 
 logger = logging.getLogger(__name__)
 
+# Базовый словарь групп 3 отделения
+DEFAULT_DEPARTMENT_3_GROUPS = {
+    "Э 11-26": 54,
+    "МЭП 11-26": 55,
+    "МПО 11-26": 56,
+    "ОМНС 11-26": 58,
+    "РПО 11-26": 59,
+    "СЛ 11-26": 60,
+    "ТЭ 11-26": 61,
+    "ТМ 11-26": 62,
+    "Э 21-25": 45,
+    "ИС 21-25": 46,
+    "МЭП 21-25": 47,
+    "МП 21-25": 48,
+    "МПО 21-25": 49,
+    "ОНМС 21-25": 50,
+    "П 21-25": 51,
+    "СЛ 21-25": 52,
+    "ТМ 21-25": 53,
+    "МРА 21-25": 63,
+    "ИС 31-24": 36,
+    "МЭП 31-24": 37,
+    "П 31-24": 38,
+    "СЛ 31-24": 39,
+    "ТМ 31-24": 42,
+    "ИС 41-23": 29,
+    "П 41-23": 30,
+    "ТЭ 41-23": 33
+}
+
 # Глобальные структуры для маппинга групп
-GROUP_NAME_TO_ID = {}
+GROUP_NAME_TO_ID = {name: [3, gid] for name, gid in DEFAULT_DEPARTMENT_3_GROUPS.items()}
 GROUP_ID_TO_NAME = {1: {}, 2: {}, 3: {}}
 
 
@@ -29,7 +59,13 @@ def build_reverse_group_dict():
     for name, data in GROUP_NAME_TO_ID.items():
         if isinstance(data, list) and len(data) == 2:
             dep, gid = data
-            GROUP_ID_TO_NAME[dep][gid] = name
+            if dep in GROUP_ID_TO_NAME:
+                GROUP_ID_TO_NAME[dep][gid] = name
+        elif isinstance(data, int):
+            GROUP_ID_TO_NAME[3][data] = name
+
+
+build_reverse_group_dict()
 
 
 def load_groups_cache():
@@ -104,23 +140,27 @@ def find_group_info(target_group):
     def _match():
         # 1. Точное совпадение
         for k, v in GROUP_NAME_TO_ID.items():
+            info = v if isinstance(v, list) else [3, v]
             if target.upper() == k.upper():
-                return k, v
+                return k, info
         # 2. Нормализованное совпадение (пробелы и дефисы)
         for k, v in GROUP_NAME_TO_ID.items():
+            info = v if isinstance(v, list) else [3, v]
             k_clean = re.sub(r'[\s\-_]+', ' ', k).strip().upper()
             if clean_target == k_clean:
-                return k, v
+                return k, info
         # 3. Компактное совпадение (без знаков)
         for k, v in GROUP_NAME_TO_ID.items():
+            info = v if isinstance(v, list) else [3, v]
             k_compact = re.sub(r'[\s\-_]+', '', k).upper()
             if compact_target == k_compact:
-                return k, v
+                return k, info
         # 4. По словам
         for k, v in GROUP_NAME_TO_ID.items():
+            info = v if isinstance(v, list) else [3, v]
             k_clean = re.sub(r'[\s\-_]+', ' ', k).strip().upper()
             if clean_target in k_clean.split():
-                return k, v
+                return k, info
         return None, None
 
     k, v = _match()
@@ -133,10 +173,10 @@ def find_group_info(target_group):
 def get_department_groups(dept):
     if not GROUP_NAME_TO_ID:
         update_groups_cache()
-    groups = [k for k, v in GROUP_NAME_TO_ID.items() if v[0] == dept]
+    groups = [k for k, v in GROUP_NAME_TO_ID.items() if (v[0] if isinstance(v, list) else 3) == dept]
     if not groups:
         update_groups_cache()
-        groups = [k for k, v in GROUP_NAME_TO_ID.items() if v[0] == dept]
+        groups = [k for k, v in GROUP_NAME_TO_ID.items() if (v[0] if isinstance(v, list) else 3) == dept]
     return sorted(groups)
 
 
