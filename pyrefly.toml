@@ -1,3 +1,3 @@
-search-path = ["."]
-
-
+search-path = [".", "src", "C:/Python311/Lib/site-packages"]
+interpreter = "C:/Python311/python.exe"
+python-interpreter = "C:/Python311/python.exe"

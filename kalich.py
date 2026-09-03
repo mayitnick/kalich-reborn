@@ -21,7 +21,6 @@
 #       functionality, edit the `src` directory instead.
 #       However, if you're refactoring this file, you can remove this note.
 
-# pyrefly: ignore [missing-import]
 import time
 _kalich_start_time = time.perf_counter()
 
@@ -200,20 +199,20 @@ def _render_schedule_msg(message, monitor, all_data,
 
 @bot.message_handler(commands=['r'])
 def cmd_r_today(message):
-    from src.bot.commands.student.schedule import ScheduleTodayCommand
+    from src.bot.commands.student import ScheduleTodayCommand
     ScheduleTodayCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(regexp=r'^/db(\s+.*)?$')
 def cmd_db_router(message):
-    from src.bot.commands.student.schedule import ScheduleArchiveCommand
+    from src.bot.commands.student import ScheduleArchiveCommand
     ScheduleArchiveCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['now'])
 def cmd_now(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.student.now import NowCommand
+    from src.bot.commands.student import NowCommand
     NowCommand().execute(message, service_container.create_context())
 
 
@@ -221,233 +220,38 @@ def cmd_now(message):
 @bot.message_handler(commands=['time'])
 def cmd_time(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    status, left, _ = get_status()
-    wd = datetime.now().isoweekday()
-    now = datetime.now()
-    curr_time = now.strftime("%H:%M")
-
-    if wd == 1:
-        monday_calls = list(CALLS[:8])
-        monday_calls.append(("14:50", "15:35"))
-        calls_to_show = monday_calls
-        end_time = datetime.strptime("15:35", "%H:%M")
-    else:
-        max_l = 8 if 2 <= wd <= 5 else 0
-        calls_to_show = CALLS[:max_l]
-        if max_l > 0:
-            end_time = datetime.strptime(CALLS[max_l - 1][1], "%H:%M")
-        else:
-            end_time = None
-
-    if status == 'work' and end_time:
-        curr_dt = datetime.strptime(curr_time, "%H:%M")
-        if curr_dt < end_time:
-            td = end_time - curr_dt
-            h, m = td.seconds // 3600, (td.seconds // 60) % 60
-            left = f"{f'{h}ч ' if h > 0 else ''}{m}м"
-        else:
-            left = "0м"
-    header = f"До конца дня: {left}" if status != 'rest' else "Отдыхай"
-
-    res = f"{header}\n" + \
-        "\n".join([f"{i+1}. {c[0]} - {c[1]}" for i,
-                  c in enumerate(calls_to_show)])
-    reply_safe(message, wrap_code(res))
+    from src.bot.commands.common import TimeCommand
+    TimeCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['mem'])
 def cmd_mem(message):
-    raw_text = message.text.replace('/mem', '', 1).strip()
-    sep = next((s for s in ['-', '—', ':'] if s in raw_text), None)
-    if not sep:
-        return reply_safe(message, wrap_code(
-            "Ошибка.\nФормат: /mem Предмет - Замена"))
-    try:
-        old, new = [p.strip() for p in raw_text.split(sep, 1)]
-        custom_names_manager.set_name(message.chat.id, old, new)
-        reply_safe(message, wrap_code(f"Успех.\n{old} -> {new}"))
-    except BaseException:
-        reply_safe(message, wrap_code("Ошибка."))
+    from src.bot.commands.admin import MemCommand
+    MemCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['list'])
 def cmd_list(message):
-    if is_teacher(message.chat.id):
-        dept, rooms = get_teacher_info(message.chat.id)
-        return reply_safe(
-            message, f"🧑‍🏫 *Учитель*\nОтделение: {dept}\nКабинеты: {', '.join(rooms)}")
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    reply_safe(message, "📋 *Подписки:*\n" +
-               "\n".join([f"- {m['group_name']}" for m in mons]))
+    from src.bot.commands.student import ListCommand
+    ListCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['unsub'])
 def cmd_unsub(message):
-    if is_teacher(message.chat.id):
-        conn = sqlite3.connect(DB_FILE)
-        conn.execute("DELETE FROM teachers WHERE chat_id=?",
-                     (message.chat.id,))
-        conn.commit()
-        conn.close()
-        return reply_safe(
-            message, "🗑 Учительский профиль удалён. /start — зарегистрироваться снова.")
-    to_del = [
-        k for k,
-        v in monitor_manager.active_monitors.items() if str(
-            v['chat_id']) == str(
-            message.chat.id)]
-    for k in to_del:
-        del monitor_manager.active_monitors[k]
-    monitor_manager.save()
-    reply_safe(message, "🗑 Подписки удалены.")
+    from src.bot.commands.student import UnsubCommand
+    UnsubCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['move'])
 def cmd_move(message):
     """Команда учителя для замены кабинета/предмета на конкретную пару."""
-    if not is_teacher(message.chat.id):
-        return
-    dept, rooms = get_teacher_info(message.chat.id)
-    if not dept:
-        return reply_safe(message, "❌ Вы не зарегистрированы как учитель.")
-
-    args_str = message.text.replace('/move', '', 1).strip()
-    day_map = {'пн': 1, 'вт': 2, 'ср': 3, 'чт': 4, 'пт': 5, 'сб': 6}
-    day_names = {1: "ПН", 2: "ВТ", 3: "СР", 4: "ЧТ", 5: "ПТ", 6: "СБ"}
-    today = datetime.now().isoweekday()
-
-    # Справка
-    if not args_str:
-        return reply_safe(message, wrap_code(
-            "Формат /move:\n"
-            "/move <пара> <кабинет>          — сегодня, все группы\n"
-            "/move <пара> <кабинет> <группа> — для конкретной группы\n"
-            "/move <день> <пара> <кабинет>   — другой день\n"
-            "/move <пара> п=<предмет>        — изменить предмет\n"
-            "/move <пара> <каб> п=<предмет>  — и то и другое\n"
-            "/move clear                     — сброс на сегодня\n"
-            "/move clear <день>              — сброс на день\n\n"
-            "Примеры:\n"
-            "/move 3 101\n"
-            "/move пн 3 101 ИС-41-22\n"
-            "/move 3 п=Алгебра\n"
-            "/move 3 101 п=Алгебра"
-        ))
-
-    tokens = args_str.split()
-
-    # /move clear [день]
-    if tokens[0].lower() == 'clear':
-        rest = tokens[1].lower() if len(tokens) > 1 else ''
-        target_day = day_map.get(rest, today)
-        conn = sqlite3.connect(DB_FILE)
-        conn.execute("DELETE FROM teacher_room_overrides WHERE teacher_chat_id=? AND day=?",
-                     (message.chat.id, target_day))
-        conn.commit()
-        conn.close()
-        return reply_safe(message, wrap_code(
-            f"🗑 Замены на {day_names.get(target_day, '?')} сброшены."))
-
-    # Определяем день
-    target_day = today
-    if tokens[0].lower() in day_map:
-        target_day = day_map[tokens.pop(0).lower()]
-
-    if not tokens:
-        return reply_safe(message, "❌ Укажите номер пары.")
-
-    # Номер пары
-    try:
-        slot_num = int(tokens.pop(0))
-        slot_idx = slot_num - 1
-    except ValueError:
-        return reply_safe(message, "❌ Номер пары должен быть цифрой (1–10).")
-    if slot_idx < 0 or slot_idx >= 10:
-        return reply_safe(message, "❌ Номер пары от 1 до 10.")
-
-    # Разбираем остаток: кабинет, п=предмет, название группы
-    new_room = None
-    new_subject = None
-    group_id = -1  # -1 = все группы
-    remaining = []
-
-    for t in tokens:
-        tl = t.lower()
-        if tl.startswith('п=') or tl.startswith('предм='):
-            new_subject = t.split('=', 1)[1]
-        elif re.match(r'^\d+[А-Яа-яA-Za-z]?$', t) and new_room is None:
-            new_room = t
-        else:
-            remaining.append(t)
-
-    # Остаток — возможно название группы
-    if remaining:
-        group_str = ' '.join(remaining)
-        matched_name, group_info = find_group_info(group_str)
-        if group_info:
-            dept = group_info[0]
-            group_id = group_info[1]
-        else:
-            return reply_safe(message, wrap_code(
-                f"❌ Группа '{group_str}' не найдена."))
-
-    if new_room is None and new_subject is None:
-        return reply_safe(
-            message, "❌ Укажите кабинет (число) и/или предмет (п=Название).")
-
-    # Сохраняем
-    save_teacher_override(
-        message.chat.id,
-        dept,
-        target_day,
-        slot_idx,
-        group_id,
-        new_room,
-        new_subject)
-
-    # Формируем подтверждение
-    all_data = get_all_schedules_for_day(target_day)
-    sample_lesson = None
-    if group_id == -1:
-        # Ищем пример урока в своих кабинетах
-        _, teacher_rooms = get_teacher_info(message.chat.id)
-        for (d, gid2), ls in all_data.items():
-            if d == dept and slot_idx < len(ls):
-                r = extract_room(str(ls[slot_idx]))
-                if r and teacher_rooms and any(
-                        tr.strip() in r for tr in teacher_rooms):
-                    sample_lesson = str(ls[slot_idx])
-                    break
-        # Если не нашли по кабинетам — берём любой
-        if not sample_lesson:
-            for (d, gid2), ls in all_data.items():
-                if d == dept and slot_idx < len(ls):
-                    sample_lesson = str(ls[slot_idx])
-                    break
-    else:
-        ls = all_data.get((dept, group_id), [])
-        if slot_idx < len(ls):
-            sample_lesson = str(ls[slot_idx])
-
-    orig_room = extract_room(sample_lesson) or "?" if sample_lesson else "?"
-    orig_subj = re.sub(
-        r'\s*\(.*$', '', sample_lesson).strip() if sample_lesson else "?"
-    group_label = GROUP_ID_TO_NAME.get(dept, {}).get(
-        group_id, "?") if group_id != -1 else "все группы"
-
-    conf = [f"✅ Сохранено | {day_names.get(target_day, '?')}, пара {slot_num}"]
-    if new_room:
-        conf.append(f"Кабинет: {orig_room} → {new_room}")
-    if new_subject:
-        conf.append(f"Предмет: {orig_subj} → {new_subject}")
-    conf.append(f"Группа: {group_label}")
-    conf.append("⏳ Уведомление ученикам через ~5 мин")
-    reply_safe(message, wrap_code("\n".join(conf)))
+    from src.bot.handlers.teacher import cmd_move as teacher_move
+    teacher_move(message)
 
 
 @bot.message_handler(commands=['flush'])
 def cmd_flush(message):
-    from src.bot.commands.admin.flush import FlushCommand
+    from src.bot.commands.admin import FlushCommand
     FlushCommand().execute(message, service_container.create_context())
 
 
@@ -455,40 +259,8 @@ def cmd_flush(message):
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    waiting_for_department[message.chat.id] = True
-    if message.chat.id in user_department:
-        del user_department[message.chat.id]
-    settings = get_user_settings(message.chat.id)
-    if settings.get('fluffy_mode'):
-        welcome_text = (
-            "👋 Привет! Я — Калич, ваш пушистый лисёнок‑помощник! 🦊\n"
-            "С радостью помогу вам быстро узнать расписание и любые замены.\n\n"
-            "Выберите свою роль:"
-        )
-    else:
-        welcome_text = (
-            "Добро пожаловать в систему расписания.\n"
-            "Пожалуйста, выберите вашу роль:"
-        )
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(
-        telebot.types.InlineKeyboardButton(
-            "1️⃣ Первое отделение",
-            callback_data="start_role_1"),
-        telebot.types.InlineKeyboardButton(
-            "2️⃣ Второе отделение", callback_data="start_role_2")
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton(
-            "3️⃣ Третье отделение",
-            callback_data="start_role_3"),
-        telebot.types.InlineKeyboardButton(
-            "🧑‍🏫 Я учитель", callback_data="start_role_4")
-    )
-    try:
-        bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
-    except BaseException:
-        pass
+    from src.bot.commands.common import StartCommand
+    StartCommand().execute(message, service_container.create_context())
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith(
@@ -572,24 +344,8 @@ def set_user_setting(chat_id, key, value):
 @bot.message_handler(commands=['settings'])
 def cmd_settings(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    settings = get_user_settings(message.chat.id)
-    markup = telebot.types.InlineKeyboardMarkup()
-    notif_btn = "✅ Уведомления" if settings['notifications'] else "❌ Уведомления"
-    voice_btn = "✅ Голосовые ответы" if settings['voice_alerts'] else "❌ Голосовые ответы"
-    fluffy_btn = "🦊 Fluffy mode" if settings['fluffy_mode'] else "🤖 Строгий бот"
-    effect_btn = f"🎧 Эффект: {settings.get('voice_effect', 'echo')}"
-
-    markup.add(telebot.types.InlineKeyboardButton(
-        notif_btn, callback_data="toggle_notifications"))
-    markup.add(telebot.types.InlineKeyboardButton(
-        voice_btn, callback_data="toggle_voice_alerts"))
-    markup.add(telebot.types.InlineKeyboardButton(
-        effect_btn, callback_data="cycle_voice_effect"))
-    markup.add(telebot.types.InlineKeyboardButton(
-        fluffy_btn, callback_data="toggle_fluffy_mode"))
-
-    msg_text = "⚙️ Ваши настройки:\n(Включите Fluffy mode, если хотите чтобы бот общался как милый лисёнок!)"
-    bot.send_message(message.chat.id, msg_text, reply_markup=markup)
+    from src.bot.commands.common import SettingsCommand
+    SettingsCommand().execute(message, service_container.create_context())
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('toggle_')
@@ -662,7 +418,7 @@ def cmd_ping(message):
 @bot.message_handler(commands=['cancel'])
 def cmd_cancel(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.common.cancel import CancelCommand
+    from src.bot.commands.common import CancelCommand
     CancelCommand().execute(message, service_container.create_context())
 
 
@@ -682,7 +438,7 @@ def cmd_about(message):
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.common.help import HelpCommand
+    from src.bot.commands.common import HelpCommand
     HelpCommand().execute(message, service_container.create_context())
 
 
@@ -749,7 +505,7 @@ def get_next_block_info(cid, department, gid, day, data, current_idx=None):
 @bot.message_handler(commands=['next'])
 def cmd_next(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.student.next import NextCommand
+    from src.bot.commands.student import NextCommand
     NextCommand().execute(message, service_container.create_context())
 
 
@@ -769,7 +525,7 @@ def format_lessons_count(count):
 @bot.message_handler(commands=['sendall'])
 def cmd_sendall(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.admin.sendall import SendAllCommand
+    from src.bot.commands.admin import SendAllCommand
     SendAllCommand().execute(message, service_container.create_context())
 
 
@@ -777,103 +533,21 @@ def cmd_sendall(message):
 @bot.message_handler(commands=['f'])
 def cmd_find_by_room(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    room_target = message.text.replace('/f', '', 1).strip()
-    if not room_target:
-        return reply_safe(message, wrap_code(
-            "Ошибка: введите номер кабинета.\nПример: /f 44"))
-
-    mons = monitor_manager.get_user_monitors(message.chat.id)
-    if not mons:
-        return reply_safe(
-            message, "❌ Нет активных подписок. Сначала подпишитесь на группу, чтобы определить отделение.")
-
-    user_department = mons[0]['department']
-    day = datetime.now().isoweekday()
-    if day > 5:
-        return reply_safe(message, wrap_code("Сегодня выходной, занятий нет."))
-
-    all_data = get_all_schedules_for_day(day)
-    max_lessons = 10
-    schedule = [{} for _ in range(max_lessons)]
-
-    for (dep, gid), lessons in all_data.items():
-        if dep != user_department:
-            continue
-        group_name = GROUP_ID_TO_NAME.get(dep, {}).get(gid, "?")
-        for idx in range(min(len(lessons), max_lessons)):
-            l_str = str(lessons[idx])
-            room = extract_room(l_str)
-            if room and room_target in room:
-                applied = custom_names_manager.apply(
-                    message.chat.id, l_str) or ""
-                subj = re.sub(r'\s*\([^)]*\)$', '', applied).strip()
-                if subj:
-                    if subj not in schedule[idx]:
-                        schedule[idx][subj] = []
-                    schedule[idx][subj].append(group_name)
-
-    res_lines = [f"Кабинет {room_target} (отделение {user_department}):"]
-    for i, hour in enumerate(schedule):
-        if hour:
-            row = " / ".join([f"{s} ({', '.join(g)})" for s,
-                             g in hour.items()])
-            res_lines.append(f"{i+1}. {row}")
-        else:
-            res_lines.append(f"{i+1}. ---")
-
-    reply_safe(message, wrap_code("\n".join(res_lines)))
+    from src.bot.commands.student import FindByRoomCommand
+    FindByRoomCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['w'])
 def cmd_find_by_group(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    target_group = message.text.replace('/w', '', 1).strip().upper()
-    if not target_group:
-        return reply_safe(message, wrap_code(
-            "Ошибка: введите группу.\nПример: /w ИС-41-22"))
-
-    clean_target = target_group.replace('-', ' ').replace('_', ' ')
-    matched_name, group_info = find_group_info(target_group)
-    if not group_info:
-        return reply_safe(message, wrap_code(
-            f"Группа {target_group} не найдена."))
-    target_group = matched_name
-    department, gid = group_info[0], group_info[1]
-
-    day = datetime.now().isoweekday()
-    if day > 5:
-        return reply_safe(message, wrap_code(
-            f"{target_group}: отдых (выходной)"))
-
-    all_day_data = get_all_schedules_for_day(day)
-    lessons = all_day_data.get(
-        (department, gid)) or fetch_lessons(
-        day, gid, department)
-
-    if lessons:
-        res = f"Группа {target_group}:\n\n"
-        cnt = 1
-        for i, l in enumerate(lessons):
-            lines = format_with_overlap(
-                message.chat.id, department, gid, day, i, l, all_day_data)
-            if not lines:
-                continue
-            if day == 1 and cnt == 1 and lines:
-                lines[0] = lines[0] + " +К/Ч"
-            res += f"{cnt}. {lines[0]}\n"
-            if len(lines) > 1:
-                res += f"   {lines[1]}\n"
-            cnt += 1
-        reply_safe(message, wrap_code(res.strip()))
-    else:
-        reply_safe(message, wrap_code(
-            f"Нет данных для {target_group} на сегодня."))
+    from src.bot.commands.student import FindByGroupCommand
+    FindByGroupCommand().execute(message, service_container.create_context())
 
 
 @bot.message_handler(commands=['fill'])
 def cmd_fill(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.admin.fill import FillCommand
+    from src.bot.commands.admin import FillCommand
     FillCommand().execute(message, service_container.create_context())
 
 
@@ -1094,7 +768,7 @@ def handle_all(message):
 
 def cmd_stats(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    from src.bot.commands.admin.stats import StatsCommand
+    from src.bot.commands.admin import StatsCommand
     StatsCommand().execute(message, service_container.create_context())
 
 
