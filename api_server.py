@@ -706,3 +706,7 @@ def start_server():
     port = int(os.getenv('PWA_PORT', 8999))
     print(f"[API] Starting web app server on http://localhost:{port}")
     web.run_app(app, host='0.0.0.0', port=port, handle_signals=False)
+
+
+if __name__ == '__main__':
+    start_server()
