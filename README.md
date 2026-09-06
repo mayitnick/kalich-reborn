@@ -8,6 +8,10 @@
 [![Lint](https://github.com/mayitnick/kalich-reborn/actions/workflows/lint.yml/badge.svg)](https://github.com/mayitnick/kalich-reborn/actions/workflows/lint.yml)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat)](LICENSE)
+[![Commits](https://img.shields.io/github/commit-activity/t/mayitnick/kalich-reborn?style=flat&label=commits&color=blue)](https://github.com/mayitnick/kalich-reborn/commits/main)
+[![Last Commit](https://img.shields.io/github/last-commit/mayitnick/kalich-reborn?style=flat&label=last%20update&color=orange)](https://github.com/mayitnick/kalich-reborn/commits/main)
+[![Repo Size](https://img.shields.io/github/repo-size/mayitnick/kalich-reborn?style=flat&color=6c7086)](https://github.com/mayitnick/kalich-reborn)
+
 [![Telegram](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?style=flat&logo=telegram&logoColor=white)](https://core.telegram.org/bots)
 [![SQLite WAL](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57?style=flat&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![REST API](https://img.shields.io/badge/REST%20API-aiohttp-2C5BB4?style=flat)](https://docs.aiohttp.org/)
