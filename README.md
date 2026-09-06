@@ -13,12 +13,12 @@
 [![Code Style](https://img.shields.io/badge/code%20style-flake8-green.svg?style=flat)](https://flake8.pycqa.org/)
 
 <p align="center">
-  <a href="#-ключевые-возможности">✨ Возможности</a> •
-  <a href="#-быстрый-старт">🚀 Быстрый старт</a> •
-  <a href="#-команды-telegram-бота">🤖 Команды</a> •
-  <a href="#️-архитектура">🏗️ Архитектура</a> •
-  <a href="#-rest-api-reference">🔌 REST API</a> •
-  <a href="#-roadmap">🗺️ Roadmap</a>
+  <a href="#features">✨ Возможности</a> •
+  <a href="#quickstart">🚀 Быстрый старт</a> •
+  <a href="#commands">🤖 Команды</a> •
+  <a href="#architecture">🏗️ Архитектура</a> •
+  <a href="#api">🔌 REST API</a> •
+  <a href="ROADMAP.md">🗺️ Roadmap</a>
 </p>
 
 ---
@@ -32,7 +32,7 @@
 
 ---
 
-## ✨ Ключевые возможности
+## <a id="features"></a>✨ Ключевые возможности
 
 ### 📅 Динамический парсинг (Глорис)
 * ⚡ **Без жесткого хардкода**: автоматический сбор актуального реестра групп со всех отделений колледжа (`глорис-окту-*.рф`).
@@ -59,7 +59,7 @@
 
 ---
 
-## 🏗️ Архитектура
+## <a id="architecture"></a>🏗️ Архитектура
 
 ```
                             ┌───────────────────────────────┐
@@ -99,7 +99,7 @@ src/
 
 ---
 
-## 🤖 Команды Telegram-бота
+## <a id="commands"></a>🤖 Команды Telegram-бота
 
 ### 🎓 Для студентов
 | Команда | Описание |
@@ -133,7 +133,7 @@ src/
 
 ---
 
-## 🚀 Быстрый старт
+## <a id="quickstart"></a>🚀 Быстрый старт
 
 ### Требования
 - **Python 3.11+**
@@ -185,7 +185,7 @@ python api_server.py
 
 ---
 
-## 🐳 Запуск через Docker
+## <a id="docker"></a>🐳 Запуск через Docker
 
 Разверните весь стек одной командой с сохранением данных:
 
@@ -198,7 +198,7 @@ docker compose up -d --build
 
 ---
 
-## 🔌 REST API Reference
+## <a id="api"></a>🔌 REST API Reference
 
 Базовый URL: `http://localhost:8999`
 
@@ -214,7 +214,7 @@ docker compose up -d --build
 
 ---
 
-## 🧪 Тестирование и качество кода
+## <a id="testing"></a>🧪 Тестирование и качество кода
 
 Мы уделяем особое внимание стабильности и чистоте кодовой базы:
 
@@ -235,7 +235,7 @@ flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
 ---
 
-## 🗺️ Roadmap
+## <a id="roadmap"></a>🗺️ Roadmap
 
 Наш подробный план развития, список киллер-фич (умный будильник, diff замен, iCal экспорт) и шаги по оптимизации зафиксированы в документе **[ROADMAP.md](ROADMAP.md)**.
 
