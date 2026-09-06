@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/kalich.png" width="160" alt="Калич" style="border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.2);" />
+
 # 🦊 Kalich Reborn
 
 ### *Умный, заботливый и надёжный ассистент по расписанию колледжа*
