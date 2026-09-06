@@ -7,6 +7,7 @@
 [![Tests](https://github.com/mayitnick/kalich-reborn/actions/workflows/test.yml/badge.svg)](https://github.com/mayitnick/kalich-reborn/actions/workflows/test.yml)
 [![Lint](https://github.com/mayitnick/kalich-reborn/actions/workflows/lint.yml/badge.svg)](https://github.com/mayitnick/kalich-reborn/actions/workflows/lint.yml)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?style=flat&logo=telegram&logoColor=white)](https://core.telegram.org/bots)
 [![SQLite WAL](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57?style=flat&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![REST API](https://img.shields.io/badge/REST%20API-aiohttp-2C5BB4?style=flat)](https://docs.aiohttp.org/)
@@ -238,6 +239,26 @@ flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 ## <a id="roadmap"></a>🗺️ Roadmap
 
 Наш подробный план развития, список киллер-фич (умный будильник, diff замен, iCal экспорт) и шаги по оптимизации зафиксированы в документе **[ROADMAP.md](ROADMAP.md)**.
+
+---
+
+## 📈 Пульс и история проекта
+
+- 📅 **Дата основания:** 18 июня 2026 г.
+- 🐾 **Пройденный путь:** 39+ коммитов заботы, рефакторинга и улучшений.
+- 🦊 **Миссия:** Бесплатный, открытый и доступный сервис расписания для всех студентов и преподавателей колледжа.
+
+---
+
+## 📜 Лицензия
+
+Проект распространяется под свободной лицензией **[GNU General Public License v3.0 (GPLv3)](LICENSE)**.
+
+> 🛡️ **Почему GPLv3?**  
+> Мы создаём этот проект на чистом энтузиазме для студентов и преподавателей, оплачиваем хостинг и бесплатно раздаём доступы. Лицензия GPLv3 гарантирует, что:
+> 1. Код проекта **всегда** останется свободным и открытым.
+> 2. Никто не имеет права закрыть исходный код, присвоить его или превратить в коммерческий закрытый продукт.
+> 3. Любые форки и модификации обязаны сохранять авторство исходного проекта и распространяться под такой же открытой лицензией GPLv3.
 
 ---
 
