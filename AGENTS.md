@@ -1,75 +1,57 @@
-# AGENTS.md — System Instructions for AI Agents
+# AGENTS.md — System Instructions for Kalich Reborn
 
-Welcome, AI Agent. This document provides a rapid, comprehensive overview of the **Kalich Reborn** repository, its architecture, rules, invariants, and operational workflows. Read this before modifying any code.
-
----
-
-## 🎯 1. Project Mission & High-Level Topology
-
-Kalich Reborn is a high-performance, modular Telegram bot and REST API platform that monitors, parses, and distributes class schedules and teacher room changes for college departments.
-
-### Primary Directories:
-- `src/`: Core Python package containing business logic, database layer, parser, analytics, notifications, and bot components.
-  - `src/core/`: Dependency injection container (`ServiceContainer`), typed execution context (`AppContext`), command scanner (`CommandScanner`), and base command abstractions (`BaseCommand`, `@command`).
-  - `src/services/`: Independent domain services (network scraper `parser.py`, Matplotlib chart generator `analytics.py`, background loops `notifier.py`).
-  - `src/bot/`: Telegram bot setup, keyboard factory, and command modules (`src/bot/commands/`).
-  - `src/config.py`: Environment variables and system constants.
-  - `src/database.py`: SQLite DAL with WAL mode, busy timeout, and monitor/custom name managers.
-- `kalich.py`: Bot entrypoint and backward-compatibility facade (re-exports symbols and synchronizes module state).
-- `api_server.py`: Async REST API on `aiohttp` (port 8999).
-- `data/`: Local persistent storage (`schedules.db`, JSON caches).
-- `tests/`: Automated unit tests using `pytest` and `unittest.mock`.
-- `archive/`: Archived PWA frontend (`pwa/`, `pwa.tar.gz`) preserved for historical reference. DO NOT delete or re-enable without explicit user request.
-- `docs/`: Human and architectural documentation (`ARCHITECTURE.md`, `COMMAND_SYSTEM.md`).
+Compact operational guide for AI agents. Adhere strictly to the invariants below.
 
 ---
 
-## 🔒 2. Critical Invariants & Rules for AI Agents
+## ⚡ Essential Commands & Environment Quirks
 
-1. **Test-Driven Invariant (100% PASS)**:
-   - Always run `PYTHONPATH=. pytest tests/` before and after changes.
-   - All tests (currently 33/33) MUST pass. Zero regressions allowed.
-2. **Linter Invariant (0 ERRORS)**:
-   - Run `flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics`. Must return `0`.
-3. **Database Access Protocol**:
-   - Always use `src.database.get_db_connection()` (or `ctx.db.get_connection()`).
-   - SQLite MUST use `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout = 5000;`. Never hardcode raw `sqlite3.connect(...)` without these pragmas.
-4. **Dependency Injection & Commands**:
-   - When adding or modifying commands, put them into `src/bot/commands/` as `BaseCommand` subclasses or `@command` functions.
-   - Declare required services via `requires = ['db', 'parser', ...]`.
-   - Access services via `ctx: AppContext` (e.g. `ctx.db`, `ctx.parser`, `ctx.analytics`, `ctx.notifier`, `ctx.config`, `ctx.bot`).
-5. **Preserve `kalich.py` Facade**:
-   - External consumers (`api_server.py`, `tests/`) import functions and attributes from `kalich`.
-   - `kalich.py` contains `_KalichModuleWrapper` to proxy changes to `src.config` and `src.services.parser`. Never remove this wrapper.
-6. **Git Authorship**:
-   - If committing on behalf of the user, ensure Git author and committer are set to:
-     `MayITNick <123010340+mayitnick@users.noreply.github.com>`.
+- **Interpreter (Windows)**: Default system `python` may be Python 3.8. The configured environment with installed dependencies is Python 3.11 (`C:\Python311\python.exe`, defined in `pyrefly.toml`).
+- **Run all tests (33 tests, 100% pass required)**:
+  - Windows PowerShell: `& "C:\Python311\python.exe" -m pytest tests/`
+  - Linux / CI: `PYTHONPATH=. pytest tests/`
+  *(Do NOT use `PYTHONPATH=. cmd` syntax directly in PowerShell — it causes a syntax error).*
+- **Run a single test**:
+  - `& "C:\Python311\python.exe" -m pytest tests/test_command_system.py -v`
+  - Or specific test case: `& "C:\Python311\python.exe" -m pytest tests/test_db.py::test_init_db -v`
+- **Lint (0 errors required)**:
+  - `flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics`
+  - Full project check: `flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics`
 
 ---
 
-## 🛠️ 3. Common Development Commands
+## 🏛️ Architecture & Import Invariants
 
-```bash
-# 1. Run all unit tests
-PYTHONPATH=. pytest tests/
-
-# 2. Run flake8 critical syntax/undefined name checks
-flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-
-# 3. Run specific test file
-PYTHONPATH=. pytest tests/test_command_system.py -v
-
-# 4. Check git status
-git status
-```
+- **Entrypoint Facade (`kalich.py`)**:
+  - Core implementation lives in `src/`. `kalich.py` is an entrypoint and backward-compatibility facade used by `api_server.py` and `tests/`.
+  - Uses `_KalichModuleWrapper` to synchronize state between root exports and `src.config` / `src.services.parser`. Never remove this wrapper.
+- **Layering & Import Rules (Never import upwards)**:
+  - `src.bot` (handlers/commands) → `src.core` (DI/Context) → `src.services` (parser/analytics/notifier) → `src.database` → `src.config`.
+  - Always use absolute imports (e.g., `from src.database import get_db_connection`, `import src.config as config`).
+  - Access mutable config values via module attribute (e.g. `config.DB_FILE`, `config.requests_get_no_proxy`) so test patches take effect.
+- **Database Protocol (`src/database.py`)**:
+  - Always obtain connections via `get_db_connection()` (or `ctx.db.get_connection()`).
+  - SQLite MUST retain `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout = 5000;`. Never use raw unconfigured `sqlite3.connect`.
+- **Command System & DI (`src/core/`, `src/bot/commands/`)**:
+  - Commands inherit from `BaseCommand` or use `@command` decorator.
+  - Required services must be declared in `requires = ['db', 'parser', ...]` and accessed via `ctx: AppContext` (`ctx.db`, `ctx.parser`, `ctx.bot`, etc.).
 
 ---
 
-## 🧭 4. Subdirectory AGENTS.md Index
+## 🧪 Testing Invariants & Fixtures
 
-For focused instructions on specific subsystems, consult:
-- [`src/AGENTS.md`](file:///root/kalich-reborn/src/AGENTS.md) — Working inside `src/` modules.
-- [`src/core/AGENTS.md`](file:///root/kalich-reborn/src/core/AGENTS.md) — Working with the DI container and scanner.
-- [`src/bot/commands/AGENTS.md`](file:///root/kalich-reborn/src/bot/commands/AGENTS.md) — Writing and testing bot commands.
-- [`tests/AGENTS.md`](file:///root/kalich-reborn/tests/AGENTS.md) — Testing patterns, fixtures, and mocks.
-- [`archive/AGENTS.md`](file:///root/kalich-reborn/archive/AGENTS.md) — Information regarding the archived PWA.
+- **Autouse TeleBot Mock**: `tests/conftest.py` automatically mocks `kalich.bot` (`mock_telebot`, autouse=True) to prevent external Telegram API calls.
+- **Isolated SQLite**: Use the `memory_db` fixture for any test touching the database; it creates and cleans up an isolated temporary DB file pointing to `kalich.DB_FILE`.
+- **No Live Network Calls**: College portal (`глорис-окту-*.рф`) must never be called in tests. Mock `config.requests_get_no_proxy` or `kalich.requests_get_no_proxy`.
+
+---
+
+## 📌 Subdirectory Guidance & Git
+
+- **Subsystem documentation**:
+  - `src/AGENTS.md` — Domain services, scraper caching, analytics headless mode, background daemon loops.
+  - `src/core/AGENTS.md` — `ServiceContainer`, `AppContext` typing, `CommandScanner` dynamic dispatch.
+  - `tests/AGENTS.md` — Test suite fixtures, mocking patterns, and synchronization.
+  - `archive/AGENTS.md` — Archived PWA frontend (`archive/pwa/`); do NOT modify, build, or re-enable without explicit user instruction.
+- **Git Commits**:
+  - Set author/committer if committing: `MayITNick <123010340+mayitnick@users.noreply.github.com>`.
