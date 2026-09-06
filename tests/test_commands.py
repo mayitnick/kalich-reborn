@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+import os
 from unittest.mock import patch, MagicMock
 
 class MockTeleBot(MagicMock):
@@ -16,9 +18,29 @@ class MockTeleBot(MagicMock):
 patch('telebot.TeleBot', MockTeleBot).start()
 
 import kalich
+import src.config as config
+import src.database as database
 
 
 class TestKalichCommands(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._temp_db = tempfile.NamedTemporaryFile(delete=False)
+        cls._temp_db.close()
+        cls._orig_db = config.DB_FILE
+        config.DB_FILE = cls._temp_db.name
+        kalich.DB_FILE = cls._temp_db.name
+        kalich.init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        config.DB_FILE = cls._orig_db
+        kalich.DB_FILE = cls._orig_db
+        try:
+            os.unlink(cls._temp_db.name)
+        except Exception:
+            pass
+
     def setUp(self):
         # Создаем мок-объект сообщения
         self.message = MagicMock()
@@ -75,10 +97,12 @@ class TestKalichCommands(unittest.TestCase):
         self.assertIn("Сегодняㅤ/r", args[1])
 
     @patch('kalich.reply_safe')
+    @patch('src.database.is_teacher')
     @patch('kalich.is_teacher')
-    def test_cmd_help(self, mock_is_teacher, mock_reply):
+    def test_cmd_help(self, mock_is_teacher_k, mock_is_teacher_db, mock_reply):
         # Тестируем команду /help
-        mock_is_teacher.return_value = False
+        mock_is_teacher_k.return_value = False
+        mock_is_teacher_db.return_value = False
         kalich.cmd_help(self.message)
         
         mock_reply.assert_called_once()
