@@ -143,6 +143,42 @@ def cmd_teacher_db(message):
     reply_safe(message, wrap_code(f"📦 {day_labels[next_day]} | каб. {rooms_str}\n\n{body}"))
 
 
+def build_teacher_blocks(schedule, calls):
+    total = min(len(schedule), len(calls))
+    if total == 0:
+        return []
+    blocks = []
+    i = 0
+    while i < total:
+        first_idx = i
+        slot_repr = repr(schedule[first_idx])
+        last_idx = i
+        while last_idx + 1 < total and repr(schedule[last_idx + 1]) == slot_repr:
+            last_idx += 1
+
+        start_time = calls[first_idx][0]
+        end_time = calls[last_idx][1]
+        count = last_idx - first_idx + 1
+
+        slot = schedule[first_idx]
+        if first_idx == last_idx:
+            num_str = f"{first_idx + 1}"
+        else:
+            num_str = f"{first_idx + 1}-{last_idx + 1}"
+
+        blocks.append({
+            "first_idx": first_idx,
+            "last_idx": last_idx,
+            "start_time": start_time,
+            "end_time": end_time,
+            "count": count,
+            "slot": slot,
+            "num_str": num_str
+        })
+        i = last_idx + 1
+    return blocks
+
+
 def cmd_teacher_now(message):
     """Показывает текущий урок учителя."""
     day = datetime.now().isoweekday()
@@ -155,10 +191,13 @@ def cmd_teacher_now(message):
     if not schedule:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
+    blocks = build_teacher_blocks(schedule, CALLS)
+    if not blocks:
+        return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
     now_dt = datetime.now()
     curr_time = now_dt.strftime("%H:%M")
     curr_dt = datetime.strptime(curr_time, "%H:%M")
-    total_slots = min(len(schedule), len(CALLS))
 
     def format_slot(slot):
         if not slot:
@@ -171,36 +210,36 @@ def cmd_teacher_now(message):
                 lines.append(f"{subj} (каб.{room})\n   {gname}")
         return "\n".join(lines)
 
-    first_start = datetime.strptime(CALLS[0][0], "%H:%M")
+    first_start = datetime.strptime(blocks[0]['start_time'], "%H:%M")
     if curr_dt < first_start:
         td = first_start - curr_dt
         h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
         rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
-        next_idx = next((i for i in range(total_slots) if schedule[i]), None)
-        if next_idx is not None:
-            next_str = f"{next_idx + 1}. {format_slot(schedule[next_idx])} ({CALLS[next_idx][0]} - {CALLS[next_idx][1]})"
+        next_b = next((b for b in blocks if b['slot']), None)
+        if next_b is not None:
+            next_str = f"{next_b['num_str']}. {format_slot(next_b['slot'])} ({next_b['start_time']} - {next_b['end_time']})"
         else:
             next_str = "пар больше нет"
-        res = f"Занятия еще не начались\nДо начала 1-го урока: {rem}\n\nСледующий: {next_str}"
+        res = f"Занятия еще не начались\nДо начала: {rem}\n\nСледующий: {next_str}"
         return reply_safe(message, wrap_code(res))
 
-    last_end = datetime.strptime(CALLS[total_slots - 1][1], "%H:%M")
+    last_end = datetime.strptime(blocks[-1]['end_time'], "%H:%M")
     if curr_dt >= last_end:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
-    for i in range(total_slots):
-        start_dt = datetime.strptime(CALLS[i][0], "%H:%M")
-        end_dt = datetime.strptime(CALLS[i][1], "%H:%M")
+    for b_idx, b in enumerate(blocks):
+        start_dt = datetime.strptime(b['start_time'], "%H:%M")
+        end_dt = datetime.strptime(b['end_time'], "%H:%M")
         if start_dt <= curr_dt <= end_dt:
-            slot = schedule[i]
-            next_idx = next((k for k in range(i + 1, total_slots) if schedule[k]), None)
-            if next_idx is not None:
-                next_str = f"{next_idx + 1}. {format_slot(schedule[next_idx])} ({CALLS[next_idx][0]} - {CALLS[next_idx][1]})"
+            slot = b['slot']
+            next_b = next((k for k in blocks[b_idx + 1:] if k['slot']), None)
+            if next_b is not None:
+                next_str = f"{next_b['num_str']}. {format_slot(next_b['slot'])} ({next_b['start_time']} - {next_b['end_time']})"
             else:
                 next_str = "пар больше нет"
 
             if not slot:
-                res = f"Сейчас: {i + 1}. Окно (нет пар в ваших кабинетах)\nВремя: {CALLS[i][0]} - {CALLS[i][1]}\n\nСледующий: {next_str}"
+                res = f"Сейчас: {b['num_str']}. Окно (нет пар в ваших кабинетах)\nВремя: {b['start_time']} - {b['end_time']}\n\nСледующий: {next_str}"
                 return reply_safe(message, wrap_code(res))
 
             total_sec = (end_dt - start_dt).seconds
@@ -210,26 +249,27 @@ def cmd_teacher_now(message):
             td = end_dt - curr_dt
             h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
             rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
+            lbl = "До конца блока:" if b['count'] > 1 else "До конца пары:"
 
             res = (
-                f"Сейчас: {i + 1}. {format_slot(slot)}\n"
-                f"Время: {CALLS[i][0]} - {CALLS[i][1]}\n"
+                f"Сейчас: {b['num_str']}. {format_slot(slot)}\n"
+                f"Время: {b['start_time']} - {b['end_time']}\n"
                 f"{bar} {percent}%\n"
-                f"До конца урока: {rem}\n\n"
+                f"{lbl} {rem}\n\n"
                 f"Следующий: {next_str}"
             )
             return reply_safe(message, wrap_code(res))
 
-    for i in range(total_slots - 1):
-        break_start = datetime.strptime(CALLS[i][1], "%H:%M")
-        break_end = datetime.strptime(CALLS[i + 1][0], "%H:%M")
+    for b_idx in range(len(blocks) - 1):
+        break_start = datetime.strptime(blocks[b_idx]['end_time'], "%H:%M")
+        break_end = datetime.strptime(blocks[b_idx + 1]['start_time'], "%H:%M")
         if break_start < curr_dt < break_end:
             td = break_end - curr_dt
             h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
             rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
-            next_idx = next((k for k in range(i + 1, total_slots) if schedule[k]), None)
-            if next_idx is not None:
-                next_str = f"{next_idx + 1}. {format_slot(schedule[next_idx])} ({CALLS[next_idx][0]} - {CALLS[next_idx][1]})"
+            next_b = next((k for k in blocks[b_idx + 1:] if k['slot']), None)
+            if next_b is not None:
+                next_str = f"{next_b['num_str']}. {format_slot(next_b['slot'])} ({next_b['start_time']} - {next_b['end_time']})"
             else:
                 next_str = "пар больше нет"
             res = (
@@ -254,10 +294,13 @@ def cmd_teacher_next(message):
     if not schedule:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
+    blocks = build_teacher_blocks(schedule, CALLS)
+    if not blocks:
+        return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
     now_dt = datetime.now()
     curr_time = now_dt.strftime("%H:%M")
     curr_dt = datetime.strptime(curr_time, "%H:%M")
-    total_slots = min(len(schedule), len(CALLS))
 
     def format_slot(slot):
         lines = []
@@ -268,29 +311,28 @@ def cmd_teacher_next(message):
                 lines.append(f"{subj} (каб.{room})\n   {gname}")
         return "\n".join(lines)
 
-    first_start = datetime.strptime(CALLS[0][0], "%H:%M")
+    first_start = datetime.strptime(blocks[0]['start_time'], "%H:%M")
     if curr_dt < first_start:
-        start_from = 0
+        next_b = next((b for b in blocks if b['slot']), None)
     else:
-        start_from = total_slots
-        for i in range(total_slots):
-            end_dt = datetime.strptime(CALLS[i][1], "%H:%M")
+        next_b = None
+        for b_idx, b in enumerate(blocks):
+            end_dt = datetime.strptime(b['end_time'], "%H:%M")
             if curr_dt < end_dt:
-                start_from = i + 1
+                next_b = next((k for k in blocks[b_idx + 1:] if k['slot']), None)
                 break
 
-    next_idx = next((k for k in range(start_from, total_slots) if schedule[k]), None)
-    if next_idx is None:
+    if next_b is None:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
-    start_t = CALLS[next_idx][0]
-    end_t = CALLS[next_idx][1]
+    start_t = next_b['start_time']
+    end_t = next_b['end_time']
     td = datetime.strptime(start_t, "%H:%M") - curr_dt
     h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
     rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
 
     res = (
-        f"Далее: {next_idx + 1}. {format_slot(schedule[next_idx])}\n"
+        f"Далее: {next_b['num_str']}. {format_slot(next_b['slot'])}\n"
         f"Время: {start_t} - {end_t}\n"
         f"Через: {rem}"
     )

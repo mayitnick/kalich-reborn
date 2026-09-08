@@ -141,7 +141,7 @@ class TestKalichCommands(unittest.TestCase):
             reply_text = args[1].replace('\u3164', ' ')
             self.assertIn("Сейчас: 1. Информатика (204)", reply_text)
             self.assertIn("Время: 08:20 - 09:05", reply_text)
-            self.assertIn("До конца урока: 30м", reply_text)
+            self.assertIn("До конца пары: 30м", reply_text)
             self.assertIn("Следующий: 2. Математика (301) (09:05 - 09:50)", reply_text)
 
         # 2. Test /now during break (e.g. 09:55 on Monday)
@@ -171,7 +171,7 @@ class TestKalichCommands(unittest.TestCase):
             args, _ = mock_reply.call_args
             reply_text = args[1].replace('\u3164', ' ')
             self.assertIn("Занятия еще не начались", reply_text)
-            self.assertIn("До начала 1-го урока: 20м", reply_text)
+            self.assertIn("До начала: 20м", reply_text)
             self.assertIn("Следующий: 1. Информатика (204) (08:20 - 09:05)", reply_text)
 
         # 4. Test /now after lessons (e.g. 12:00 on Monday)
@@ -226,6 +226,34 @@ class TestKalichCommands(unittest.TestCase):
             args, _ = mock_reply.call_args
             reply_text = args[1].replace('\u3164', ' ')
             self.assertIn("Пар больше нет", reply_text)
+
+        # 8. Test merged block of consecutive identical lessons
+        merged_lessons = ["Информатика (204)", "Информатика (204)", "Физика (201)"]
+        kalich.save_schedule_to_db(1, 101, 1, "test_h2", json.dumps(merged_lessons), "2026-09-08")
+        with patch('src.bot.commands.student.datetime') as mock_dt:
+            # During first half of block (08:35)
+            mock_dt.now.return_value = dt_during_lesson
+            mock_dt.strptime = datetime.datetime.strptime
+
+            mock_reply.reset_mock()
+            kalich.cmd_now(self.message)
+            mock_reply.assert_called_once()
+            args, _ = mock_reply.call_args
+            reply_text = args[1].replace('\u3164', ' ')
+            self.assertIn("Сейчас: 1-2. Информатика (204)", reply_text)
+            self.assertIn("Время: 08:20 - 09:50", reply_text)
+            self.assertIn("До конца блока: 1ч 15м", reply_text)
+            self.assertIn("Следующий: 3. Физика (201) (10:00 - 10:45)", reply_text)
+
+            # Test /next during merged block
+            mock_reply.reset_mock()
+            kalich.cmd_next(self.message)
+            mock_reply.assert_called_once()
+            args, _ = mock_reply.call_args
+            reply_text = args[1].replace('\u3164', ' ')
+            self.assertIn("Далее: 3. Физика (201)", reply_text)
+            self.assertIn("Время: 10:00 - 10:45", reply_text)
+            self.assertIn("Через: 1ч 25м", reply_text)
 
 if __name__ == '__main__':
     unittest.main()
