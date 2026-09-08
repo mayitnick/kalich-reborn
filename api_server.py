@@ -7,6 +7,7 @@ import hmac
 import threading
 from urllib.parse import parse_qsl
 from datetime import datetime, timedelta
+import asyncio
 from aiohttp import web
 import kalich
 from src.config import now_msk
@@ -80,28 +81,26 @@ async def handle_auth(request):
             
         chat_id = int(device_id)
         
-        # Determine role from DB
-        role = 'student'
-        dept = 3
-        rooms = []
-        
-        if chat_id in kalich.MODERATOR_IDS:
-            role = 'moderator'
-            dept, rooms = kalich.get_teacher_info(chat_id)
-        elif kalich.is_teacher(chat_id):
-            role = 'teacher'
-            dept, rooms = kalich.get_teacher_info(chat_id)
-            
-        settings = kalich.get_user_settings(chat_id)
-        
-        profile = {
-            'id': chat_id,
-            'role': role,
-            'department': dept,
-            'rooms': rooms,
-            'settings': settings
-        }
-        
+        def sync_auth_worker():
+            role = 'student'
+            dept = 3
+            rooms = []
+            if chat_id in kalich.MODERATOR_IDS:
+                role = 'moderator'
+                dept, rooms = kalich.get_teacher_info(chat_id)
+            elif kalich.is_teacher(chat_id):
+                role = 'teacher'
+                dept, rooms = kalich.get_teacher_info(chat_id)
+            settings = kalich.get_user_settings(chat_id)
+            return {
+                'id': chat_id,
+                'role': role,
+                'department': dept,
+                'rooms': rooms,
+                'settings': settings
+            }
+
+        profile = await asyncio.to_thread(sync_auth_worker)
         return web.json_response({'user': profile})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -121,17 +120,17 @@ async def handle_request_teacher(request):
         chat_id = int(device_id)
         rooms_json = json.dumps(rooms, ensure_ascii=False)
         
-        conn = sqlite3.connect(kalich.DB_FILE)
-        conn.execute(
-            "INSERT OR REPLACE INTO teachers (chat_id, department, rooms, name, status) VALUES (?, ?, ?, ?, 'pending')",
-            (chat_id, department, rooms_json, name)
-        )
-        conn.commit()
-        conn.close()
-        
-        # Send to telegram moderators
-        kalich.send_teacher_approval_request(chat_id, name, department, rooms)
-        
+        def sync_request_teacher():
+            conn = sqlite3.connect(kalich.DB_FILE)
+            conn.execute(
+                "INSERT OR REPLACE INTO teachers (chat_id, department, rooms, name, status) VALUES (?, ?, ?, ?, 'pending')",
+                (chat_id, department, rooms_json, name)
+            )
+            conn.commit()
+            conn.close()
+            kalich.send_teacher_approval_request(chat_id, name, department, rooms)
+
+        await asyncio.to_thread(sync_request_teacher)
         return web.json_response({'status': 'success'})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -195,16 +194,18 @@ async def handle_schedule(request):
 
         # CASE 1: Query entire week for a single group
         if day == 'all' and group_id_param != 'all':
-            week_schedules = {}
-            for d in range(1, 7):
-                d_date = kalich.get_date_for_weekday(d)
-                gid = int(group_id_param)
-                lessons = get_group_lessons_helper(dept, gid, d, d_date)
-                
-                # Apply overrides
-                all_data = {(dept, gid): lessons}
-                overridden = kalich.apply_teacher_overrides(all_data, d, d_date)
-                week_schedules[d] = overridden.get((dept, gid), lessons)
+            def sync_week_worker():
+                week_schedules = {}
+                for d in range(1, 7):
+                    d_date = kalich.get_date_for_weekday(d)
+                    gid = int(group_id_param)
+                    lessons = get_group_lessons_helper(dept, gid, d, d_date)
+                    all_data = {(dept, gid): lessons}
+                    overridden = kalich.apply_teacher_overrides(all_data, d, d_date)
+                    week_schedules[d] = overridden.get((dept, gid), lessons)
+                return week_schedules
+
+            week_schedules = await asyncio.to_thread(sync_week_worker)
             return web.json_response({'week_schedules': week_schedules})
 
         # CASE 2: Query all groups of a department for a day/date
@@ -212,20 +213,20 @@ async def handle_schedule(request):
             if day == 'all':
                 return web.json_response({'error': 'Cannot request entire week for all groups at once'}, status=400)
                 
-            # Find all groups belonging to the department
-            dept_groups = []
-            for name, info in kalich.GROUP_NAME_TO_ID.items():
-                if info[0] == dept:
-                    dept_groups.append((name, info[1]))
-            
-            dept_schedules = {}
-            for gname, gid in dept_groups:
-                lessons = get_group_lessons_helper(dept, gid, day, date_str)
-                
-                # Apply overrides
-                all_data = {(dept, gid): lessons}
-                overridden = kalich.apply_teacher_overrides(all_data, day, date_str)
-                dept_schedules[gname] = overridden.get((dept, gid), lessons)
+            def sync_dept_worker():
+                dept_groups = []
+                for name, info in kalich.GROUP_NAME_TO_ID.items():
+                    if info[0] == dept:
+                        dept_groups.append((name, info[1]))
+                dept_schedules = {}
+                for gname, gid in dept_groups:
+                    lessons = get_group_lessons_helper(dept, gid, day, date_str)
+                    all_data = {(dept, gid): lessons}
+                    overridden = kalich.apply_teacher_overrides(all_data, day, date_str)
+                    dept_schedules[gname] = overridden.get((dept, gid), lessons)
+                return dept_schedules
+
+            dept_schedules = await asyncio.to_thread(sync_dept_worker)
             return web.json_response({'department_schedules': dept_schedules})
 
         # CASE 3: Single day & single group query
@@ -234,13 +235,13 @@ async def handle_schedule(request):
             if day > 6:
                 return web.json_response([])
                 
-            lessons = get_group_lessons_helper(dept, gid, day, date_str)
-            
-            # Apply Overrides
-            all_data = {(dept, gid): lessons}
-            overridden = kalich.apply_teacher_overrides(all_data, day, date_str)
-            final_lessons = overridden.get((dept, gid), lessons)
-            
+            def sync_single_worker():
+                lessons = get_group_lessons_helper(dept, gid, day, date_str)
+                all_data = {(dept, gid): lessons}
+                overridden = kalich.apply_teacher_overrides(all_data, day, date_str)
+                return overridden.get((dept, gid), lessons)
+
+            final_lessons = await asyncio.to_thread(sync_single_worker)
             return web.json_response(final_lessons)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -257,10 +258,12 @@ async def handle_teacher_schedule(request):
         if chat_id != 1234567 and not kalich.is_teacher(chat_id) and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
             
-        all_data = kalich.get_all_schedules_for_day(day)
-        all_data = kalich.apply_teacher_overrides(all_data, day, date_str)
-        
-        dept, rooms, schedule = kalich.get_teacher_schedule(chat_id, day, all_data, date_str)
+        def sync_teacher_schedule_worker():
+            all_data = kalich.get_all_schedules_for_day(day)
+            all_data = kalich.apply_teacher_overrides(all_data, day, date_str)
+            return kalich.get_teacher_schedule(chat_id, day, all_data, date_str)[2]
+
+        schedule = await asyncio.to_thread(sync_teacher_schedule_worker)
         return web.json_response(schedule)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -283,23 +286,25 @@ async def handle_override(request):
         new_subject = data.get('new_subject')
         date_str = data.get('date')
         
-        if not new_room and not new_subject:
-            conn = sqlite3.connect(kalich.DB_FILE)
-            if date_str:
-                conn.execute(
-                    "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND date=?",
-                    (day, slot_idx, group_id, dept, date_str)
-                )
+        def sync_override_worker():
+            if not new_room and not new_subject:
+                conn = sqlite3.connect(kalich.DB_FILE)
+                if date_str:
+                    conn.execute(
+                        "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND date=?",
+                        (day, slot_idx, group_id, dept, date_str)
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND (date IS NULL OR date='')",
+                        (day, slot_idx, group_id, dept)
+                    )
+                conn.commit()
+                conn.close()
             else:
-                conn.execute(
-                    "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND (date IS NULL OR date='')",
-                    (day, slot_idx, group_id, dept)
-                )
-            conn.commit()
-            conn.close()
-        else:
-            kalich.save_teacher_override(chat_id, dept, day, slot_idx, group_id, new_room, new_subject, date_str)
-            
+                kalich.save_teacher_override(chat_id, dept, day, slot_idx, group_id, new_room, new_subject, date_str)
+
+        await asyncio.to_thread(sync_override_worker)
         return web.json_response({'status': 'success'})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -317,32 +322,34 @@ async def handle_sync(request):
         if chat_id != 1234567 and not kalich.is_teacher(chat_id) and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
             
-        for o in overrides:
-            dept = int(o.get('department'))
-            day = int(o.get('day'))
-            slot_idx = int(o.get('slot_idx'))
-            group_id = int(o.get('group_id'))
-            new_room = o.get('new_room')
-            new_subject = o.get('new_subject')
-            date_str = o.get('date')
-            
-            if not new_room and not new_subject:
-                conn = sqlite3.connect(kalich.DB_FILE)
-                if date_str:
-                    conn.execute(
-                        "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND date=?",
-                        (day, slot_idx, group_id, dept, date_str)
-                    )
-                else:
-                    conn.execute(
-                        "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND (date IS NULL OR date='')",
-                        (day, slot_idx, group_id, dept)
-                    )
-                conn.commit()
-                conn.close()
-            else:
-                kalich.save_teacher_override(chat_id, dept, day, slot_idx, group_id, new_room, new_subject, date_str)
+        def sync_overrides_batch():
+            for o in overrides:
+                dept = int(o.get('department'))
+                day = int(o.get('day'))
+                slot_idx = int(o.get('slot_idx'))
+                group_id = int(o.get('group_id'))
+                new_room = o.get('new_room')
+                new_subject = o.get('new_subject')
+                date_str = o.get('date')
                 
+                if not new_room and not new_subject:
+                    conn = sqlite3.connect(kalich.DB_FILE)
+                    if date_str:
+                        conn.execute(
+                            "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND date=?",
+                            (day, slot_idx, group_id, dept, date_str)
+                        )
+                    else:
+                        conn.execute(
+                            "DELETE FROM teacher_room_overrides WHERE day=? AND slot_idx=? AND group_id=? AND department=? AND (date IS NULL OR date='')",
+                            (day, slot_idx, group_id, dept)
+                        )
+                    conn.commit()
+                    conn.close()
+                else:
+                    kalich.save_teacher_override(chat_id, dept, day, slot_idx, group_id, new_room, new_subject, date_str)
+
+        await asyncio.to_thread(sync_overrides_batch)
         return web.json_response({'status': 'success', 'synced': len(overrides)})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -357,11 +364,14 @@ async def handle_settings(request):
         user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
         chat_id = user_data.get('id') if user_data else 1234567
         
-        for k, v in settings.items():
-            kalich.set_user_setting(chat_id, k, v)
-            
+        def sync_settings_worker():
+            for k, v in settings.items():
+                kalich.set_user_setting(chat_id, k, v)
+
+        await asyncio.to_thread(sync_settings_worker)
         return web.json_response({'status': 'success'})
     except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
         return web.json_response({'error': str(e)}, status=500)
 
 # Analytics Data
@@ -373,100 +383,101 @@ async def handle_analytics(request):
         if not target:
             return web.json_response({'error': 'Missing target'}, status=400)
             
-        subjects_data = {}
-        daily_data = {}
-        
-        conn = sqlite3.connect(kalich.DB_FILE)
-        
-        if stats_type == 'group':
-            dep, gid = map(int, target.split('-'))
+        def sync_analytics_worker():
+            subjects_data = {}
+            daily_data = {}
+            conn = sqlite3.connect(kalich.DB_FILE)
             
-            rows = conn.execute(
-                "SELECT date, lessons_text FROM schedule_history WHERE group_id = ? AND department = ?",
-                (gid, dep)
-            ).fetchall()
-            
-            for date_str, lessons_json in rows:
-                try:
-                    lessons = json.loads(lessons_json)
-                except Exception:
-                    continue
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-                weekday = dt.isoweekday()
-                if weekday <= 6:
-                    hours = sum(1 for l in lessons if l.strip() and l.strip().lower() != "обед" and l.strip() not in ["—", "о", "О", "x", "X", "."])
-                    daily_data[weekday] = daily_data.get(weekday, 0) + hours
-                    
-                for lesson in lessons:
-                    l_str = str(lesson).strip()
-                    if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
-                        continue
-                    subj = kalich.re.sub(r'\s*\(.*$', '', l_str).strip()
-                    if subj:
-                        subjects_data[subj] = subjects_data.get(subj, 0) + 1
-        else:
-            t_row = conn.execute(
-                "SELECT department, rooms FROM teachers WHERE name=? AND status='approved'",
-                (target,)
-            ).fetchone()
-            
-            if t_row:
-                dep = t_row[0]
-                rooms = json.loads(t_row[1])
+            if stats_type == 'group':
+                dep, gid = map(int, target.split('-'))
                 rows = conn.execute(
-                    "SELECT date, group_id, lessons_text, department FROM schedule_history WHERE department = ?",
-                    (dep,)
-                ).fetchall()
-            else:
-                rooms = [target]
-                rows = conn.execute(
-                    "SELECT date, group_id, lessons_text, department FROM schedule_history"
+                    "SELECT date, lessons_text FROM schedule_history WHERE group_id = ? AND department = ?",
+                    (gid, dep)
                 ).fetchall()
                 
-            active_days = {}
-            groups_data = {}
-            for row in rows:
-                date_str = row[0]
-                group_id = row[1]
-                lessons_json = row[2]
-                row_dept = row[3]
-                try:
-                    lessons = json.loads(lessons_json)
-                except Exception:
-                    continue
-                for idx, lesson in enumerate(lessons):
-                    l_str = str(lesson).strip()
-                    if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
+                for date_str, lessons_json in rows:
+                    try:
+                        lessons = json.loads(lessons_json)
+                    except Exception:
                         continue
-                    room = kalich.extract_room(l_str)
-                    if room and any(r.strip() in room for r in rooms):
-                        dt = datetime.strptime(date_str, "%Y-%m-%d")
-                        wd = dt.isoweekday()
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    weekday = dt.isoweekday()
+                    if weekday <= 6:
+                        hours = sum(1 for l in lessons if l.strip() and l.strip().lower() != "обед" and l.strip() not in ["—", "о", "О", "x", "X", "."])
+                        daily_data[weekday] = daily_data.get(weekday, 0) + hours
                         
+                    for lesson in lessons:
+                        l_str = str(lesson).strip()
+                        if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
+                            continue
                         subj = kalich.re.sub(r'\s*\(.*$', '', l_str).strip()
-                        subjects_data[subj] = subjects_data.get(subj, 0) + 1
-                        
-                        active_days.setdefault(wd, {})
-                        active_days[wd][(date_str, idx)] = True
-                        
-                        gname = kalich.GROUP_ID_TO_NAME.get(row_dept, {}).get(group_id, f"Гр. {group_id}")
-                        full_gname = f"{gname} (Отд. {row_dept})"
-                        groups_data[full_gname] = groups_data.get(full_gname, 0) + 1
-                        
-            for wd, slots in active_days.items():
-                if wd <= 6:
-                    daily_data[wd] = len(slots)
-                        
-        conn.close()
-        sorted_subjects = dict(sorted(subjects_data.items(), key=lambda x: x[1], reverse=True)[:8])
-        
-        response_data = {
-            'subjects': sorted_subjects,
-            'daily': daily_data
-        }
-        if stats_type != 'group':
-            response_data['groups'] = dict(sorted(groups_data.items(), key=lambda x: x[1], reverse=True)[:8])
+                        if subj:
+                            subjects_data[subj] = subjects_data.get(subj, 0) + 1
+            else:
+                t_row = conn.execute(
+                    "SELECT department, rooms FROM teachers WHERE name=? AND status='approved'",
+                    (target,)
+                ).fetchone()
+                
+                if t_row:
+                    dep = t_row[0]
+                    rooms = json.loads(t_row[1])
+                    rows = conn.execute(
+                        "SELECT date, group_id, lessons_text, department FROM schedule_history WHERE department = ?",
+                        (dep,)
+                    ).fetchall()
+                else:
+                    rooms = [target]
+                    rows = conn.execute(
+                        "SELECT date, group_id, lessons_text, department FROM schedule_history"
+                    ).fetchall()
+                    
+                active_days = {}
+                groups_data = {}
+                for row in rows:
+                    date_str = row[0]
+                    group_id = row[1]
+                    lessons_json = row[2]
+                    row_dept = row[3]
+                    try:
+                        lessons = json.loads(lessons_json)
+                    except Exception:
+                        continue
+                    for idx, lesson in enumerate(lessons):
+                        l_str = str(lesson).strip()
+                        if not l_str or l_str.lower() == "обед" or l_str in ["—", "о", "О", "x", "X", "."]:
+                            continue
+                        room = kalich.extract_room(l_str)
+                        if room and any(r.strip() in room for r in rooms):
+                            dt = datetime.strptime(date_str, "%Y-%m-%d")
+                            wd = dt.isoweekday()
+                            
+                            subj = kalich.re.sub(r'\s*\(.*$', '', l_str).strip()
+                            subjects_data[subj] = subjects_data.get(subj, 0) + 1
+                            
+                            active_days.setdefault(wd, {})
+                            active_days[wd][(date_str, idx)] = True
+                            
+                            gname = kalich.GROUP_ID_TO_NAME.get(row_dept, {}).get(group_id, f"Гр. {group_id}")
+                            full_gname = f"{gname} (Отд. {row_dept})"
+                            groups_data[full_gname] = groups_data.get(full_gname, 0) + 1
+                            
+                for wd, slots in active_days.items():
+                    if wd <= 6:
+                        daily_data[wd] = len(slots)
+                            
+            conn.close()
+            sorted_subjects = dict(sorted(subjects_data.items(), key=lambda x: x[1], reverse=True)[:8])
             
+            response_data = {
+                'subjects': sorted_subjects,
+                'daily': daily_data
+            }
+            if stats_type != 'group':
+                response_data['groups'] = dict(sorted(groups_data.items(), key=lambda x: x[1], reverse=True)[:8])
+            return response_data
+
+        response_data = await asyncio.to_thread(sync_analytics_worker)
         return web.json_response(response_data)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -476,25 +487,29 @@ async def handle_analytics(request):
 # Get all active overrides
 async def handle_admin_overrides(request):
     try:
-        conn = sqlite3.connect(kalich.DB_FILE)
-        rows = conn.execute(
-            "SELECT id, teacher_chat_id, department, day, slot_idx, group_id, new_room, new_subject FROM teacher_room_overrides"
-        ).fetchall()
-        conn.close()
-        
-        overrides = []
-        for r in rows:
-            gname = "Все группы" if r[5] == -1 else kalich.GROUP_ID_TO_NAME.get(r[2], {}).get(r[5], f"Гр. {r[5]}")
-            overrides.append({
-                'id': r[0],
-                'teacher_chat_id': r[1],
-                'department': r[2],
-                'day': r[3],
-                'slot_idx': r[4],
-                'group_name': gname,
-                'new_room': r[6],
-                'new_subject': r[7]
-            })
+        def sync_admin_overrides():
+            conn = sqlite3.connect(kalich.DB_FILE)
+            rows = conn.execute(
+                "SELECT id, teacher_chat_id, department, day, slot_idx, group_id, new_room, new_subject FROM teacher_room_overrides"
+            ).fetchall()
+            conn.close()
+            
+            overrides = []
+            for r in rows:
+                gname = "Все группы" if r[5] == -1 else kalich.GROUP_ID_TO_NAME.get(r[2], {}).get(r[5], f"Гр. {r[5]}")
+                overrides.append({
+                    'id': r[0],
+                    'teacher_chat_id': r[1],
+                    'department': r[2],
+                    'day': r[3],
+                    'slot_idx': r[4],
+                    'group_name': gname,
+                    'new_room': r[6],
+                    'new_subject': r[7]
+                })
+            return overrides
+
+        overrides = await asyncio.to_thread(sync_admin_overrides)
         return web.json_response({'overrides': overrides})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -510,10 +525,13 @@ async def handle_admin_delete_override(request):
             return web.json_response({'error': 'Unauthorized'}, status=401)
             
         override_id = int(data.get('id'))
-        conn = sqlite3.connect(kalich.DB_FILE)
-        conn.execute("DELETE FROM teacher_room_overrides WHERE id=?", (override_id,))
-        conn.commit()
-        conn.close()
+        def sync_delete_override():
+            conn = sqlite3.connect(kalich.DB_FILE)
+            conn.execute("DELETE FROM teacher_room_overrides WHERE id=?", (override_id,))
+            conn.commit()
+            conn.close()
+
+        await asyncio.to_thread(sync_delete_override)
         return web.json_response({'status': 'success'})
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
@@ -532,23 +550,27 @@ async def handle_admin_flush(request):
         end_date = data.get('end_date')
         department = data.get('department', 'all')
         
-        conn = sqlite3.connect(kalich.DB_FILE)
-        if start_date and end_date:
-            if department and department != 'all':
-                conn.execute("DELETE FROM schedule_history WHERE date >= ? AND date <= ? AND department = ?", (start_date, end_date, int(department)))
-                conn.execute("DELETE FROM schedules WHERE department = ?", (int(department),))
+        def sync_flush():
+            conn = sqlite3.connect(kalich.DB_FILE)
+            if start_date and end_date:
+                if department and department != 'all':
+                    conn.execute("DELETE FROM schedule_history WHERE date >= ? AND date <= ? AND department = ?", (start_date, end_date, int(department)))
+                    conn.execute("DELETE FROM schedules WHERE department = ?", (int(department),))
+                else:
+                    conn.execute("DELETE FROM schedule_history WHERE date >= ? AND date <= ?", (start_date, end_date))
+                    conn.execute("DELETE FROM schedules")
             else:
-                conn.execute("DELETE FROM schedule_history WHERE date >= ? AND date <= ?", (start_date, end_date))
-                conn.execute("DELETE FROM schedules")
-        else:
-            if department and department != 'all':
-                conn.execute("DELETE FROM schedules WHERE department = ?", (int(department),))
-            else:
-                conn.execute("DELETE FROM schedules")
-        conn.commit()
-        conn.close()
+                if department and department != 'all':
+                    conn.execute("DELETE FROM schedules WHERE department = ?", (int(department),))
+                else:
+                    conn.execute("DELETE FROM schedules")
+            conn.commit()
+            conn.close()
+
+        await asyncio.to_thread(sync_flush)
         return web.json_response({'status': 'success'})
     except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
         return web.json_response({'error': str(e)}, status=500)
 
 # Background runner to fill databases
