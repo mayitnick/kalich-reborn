@@ -166,8 +166,8 @@ def get_schedule_history_for_date(date_str):
 
 
 def get_date_for_weekday(day_num):
-    """Возвращает строку YYYY-MM-DD для указанного дня (1-7) текущей недели."""
-    today = datetime.now()
+    """Возвращает строку YYYY-MM-DD для указанного дня (1-7) текущей недели по МСК."""
+    today = getattr(config, 'now_msk', datetime.now)()
     start_of_week = today - timedelta(days=today.weekday())
     target_date = start_of_week + timedelta(days=day_num - 1)
     return target_date.strftime("%Y-%m-%d")

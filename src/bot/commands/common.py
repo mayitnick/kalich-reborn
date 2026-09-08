@@ -5,6 +5,7 @@ from datetime import datetime
 from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 import messages
 import src.config
+from src.config import now_msk
 from src.core.command import BaseCommand
 from src.core.container import AppContext, NotifierService
 from src.bot.instance import reply_safe, logger
@@ -99,8 +100,8 @@ class TimeCommand(BaseCommand):
 
     def execute(self, message: Message, ctx: AppContext, **kwargs):
         status, left, _ = ctx.notifier.get_status()
-        wd = datetime.now().isoweekday()
-        now = datetime.now()
+        now = now_msk()
+        wd = now.isoweekday()
         curr_time = now.strftime("%H:%M")
         calls = ctx.config.CALLS
 

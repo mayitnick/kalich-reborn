@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from src.config import DB_FILE, CALLS
+from src.config import DB_FILE, CALLS, now_msk
 from src.database import (
     get_db_connection,
     is_teacher,
@@ -49,7 +49,7 @@ def format_teacher_schedule(rooms, schedule, day):
 def cmd_teacher_r(message, day=None, label=None):
     """Выводит расписание учителя на указанный день."""
     if day is None:
-        day = datetime.now().isoweekday()
+        day = now_msk().isoweekday()
     original_data = get_all_schedules_for_day(day)
     overridden_data = apply_teacher_overrides(original_data, day)
 
@@ -134,7 +134,7 @@ def cmd_teacher_db(message):
         return reply_safe(message, wrap_code(f"🗓 {day_labels[target_day]} | каб. {rooms_str}\n\n{body}"))
 
     # Классический /db (завтра)
-    curr_day = datetime.now().isoweekday()
+    curr_day = now_msk().isoweekday()
     next_day = 1 if curr_day >= 5 else curr_day + 1
     all_data = get_all_schedules_for_day(next_day)
     all_data = apply_teacher_overrides(all_data, next_day)
@@ -181,7 +181,7 @@ def build_teacher_blocks(schedule, calls):
 
 def cmd_teacher_now(message):
     """Показывает текущий урок учителя."""
-    day = datetime.now().isoweekday()
+    day = now_msk().isoweekday()
     if day > 5:
         return reply_safe(message, wrap_code("Отдыхай (выходной)\n(Используй /db)") + "\n\n/db")
 
@@ -195,7 +195,7 @@ def cmd_teacher_now(message):
     if not blocks:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
-    now_dt = datetime.now()
+    now_dt = now_msk()
     curr_time = now_dt.strftime("%H:%M")
     curr_dt = datetime.strptime(curr_time, "%H:%M")
 
@@ -284,7 +284,7 @@ def cmd_teacher_now(message):
 
 def cmd_teacher_next(message):
     """Показывает следующий урок учителя."""
-    day = datetime.now().isoweekday()
+    day = now_msk().isoweekday()
     if day > 5:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
@@ -298,7 +298,7 @@ def cmd_teacher_next(message):
     if not blocks:
         return reply_safe(message, wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
-    now_dt = datetime.now()
+    now_dt = now_msk()
     curr_time = now_dt.strftime("%H:%M")
     curr_dt = datetime.strptime(curr_time, "%H:%M")
 
@@ -350,7 +350,7 @@ def cmd_move(message):
     args_str = message.text.replace('/move', '', 1).strip()
     day_map = {'пн': 1, 'вт': 2, 'ср': 3, 'чт': 4, 'пт': 5, 'сб': 6}
     day_names = {1: "ПН", 2: "ВТ", 3: "СР", 4: "ЧТ", 5: "ПТ", 6: "СБ"}
-    today = datetime.now().isoweekday()
+    today = now_msk().isoweekday()
 
     if not args_str:
         return reply_safe(message, wrap_code(

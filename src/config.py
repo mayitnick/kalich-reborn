@@ -2,11 +2,27 @@ import os
 import urllib.request
 import urllib3
 import requests
+from datetime import datetime, timezone, timedelta
 from typing import cast, Any
 from dotenv import load_dotenv
 
 load_dotenv()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ====== ЧАСОВОЙ ПОЯС (MSK, UTC+3) ======
+try:
+    from zoneinfo import ZoneInfo
+    MSK_TZ = ZoneInfo("Europe/Moscow")
+except Exception:
+    MSK_TZ = timezone(timedelta(hours=3))
+
+
+def now_msk() -> datetime:
+    """Возвращает текущую дату и время по московскому времени (MSK, UTC+3)."""
+    try:
+        return datetime.now(MSK_TZ).replace(tzinfo=None)
+    except Exception:
+        return datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None)
 
 
 def requests_get_no_proxy(*args, **kwargs):

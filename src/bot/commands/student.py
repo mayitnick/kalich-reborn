@@ -4,6 +4,7 @@
 import re
 from datetime import datetime
 from telebot.types import Message
+from src.config import now_msk
 from src.core.command import BaseCommand
 from src.core.container import AppContext
 from src.bot.handlers.teacher import (
@@ -94,7 +95,7 @@ def get_next_block_info(ctx: AppContext, cid: int, department: int, gid: int,
         if not blocks:
             return None
 
-        now_dt = datetime.now()
+        now_dt = now_msk()
         curr_time = now_dt.strftime("%H:%M")
         curr_dt = datetime.strptime(curr_time, "%H:%M")
 
@@ -195,7 +196,7 @@ class NowCommand(BaseCommand):
         if ctx.db.is_teacher(message.chat.id):
             return cmd_teacher_now(message)
 
-        now_dt = datetime.now()
+        now_dt = now_msk()
         day = now_dt.isoweekday()
         if day > 5:
             return ctx.reply(message, ctx.wrap_code("Отдыхай (выходной)\n(Используй /db)") + "\n\n/db")
@@ -297,7 +298,7 @@ class NextCommand(BaseCommand):
         if ctx.db.is_teacher(message.chat.id):
             return cmd_teacher_next(message)
 
-        now_dt = datetime.now()
+        now_dt = now_msk()
         day = now_dt.isoweekday()
         if day > 5:
             return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
@@ -392,7 +393,7 @@ class ScheduleTodayCommand(BaseCommand):
         if ctx.db.is_teacher(message.chat.id):
             return cmd_teacher_r(message)
 
-        day = datetime.now().isoweekday()
+        day = now_msk().isoweekday()
         if day > 5:
             return ctx.reply(message, ctx.wrap_code("Отдыхай (выходной)"))
 
@@ -464,7 +465,7 @@ class ScheduleArchiveCommand(BaseCommand):
             return
 
         # Если без аргументов — выводим расписание НА ЗАВТРА
-        curr_day = datetime.now().isoweekday()
+        curr_day = now_msk().isoweekday()
         next_day = 1 if curr_day >= 5 else curr_day + 1
         refresh_gloris_schedule(ctx, mons, next_day)
         all_data = ctx.db.get_all_schedules_for_day(next_day)
@@ -541,7 +542,7 @@ class FindByRoomCommand(BaseCommand):
             )
 
         user_department = mons[0]['department']
-        day = datetime.now().isoweekday()
+        day = now_msk().isoweekday()
         if day > 5:
             return ctx.reply(message, ctx.wrap_code("Сегодня выходной, занятий нет."))
 
@@ -599,7 +600,7 @@ class FindByGroupCommand(BaseCommand):
         target_group = matched_name
         department, gid = group_info[0], group_info[1]
 
-        day = datetime.now().isoweekday()
+        day = now_msk().isoweekday()
         if day > 5:
             return ctx.reply(
                 message, ctx.wrap_code(f"{target_group}: отдых (выходной)")

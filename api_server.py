@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl
 from datetime import datetime, timedelta
 from aiohttp import web
 import kalich
+from src.config import now_msk
 
 # Telegram verification helper
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -150,7 +151,7 @@ async def handle_health(request):
         'status': 'ok' if db_ok else 'degraded',
         'database': 'connected' if db_ok else 'error',
         'groups_count': len(kalich.GROUP_NAME_TO_ID),
-        'timestamp': datetime.now().isoformat()
+        'timestamp': now_msk().isoformat()
     })
 
 # Get Groups Cache (supports dynamic refresh)
@@ -560,7 +561,7 @@ def background_fill_runner(start_date_str=None, end_date_str=None, department=No
             end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
         else:
             # Default to current week Mon-Fri
-            today = datetime.now()
+            today = now_msk()
             start_dt = today - timedelta(days=today.weekday())
             end_dt = start_dt + timedelta(days=4)
             

@@ -130,10 +130,7 @@ class TestKalichCommands(unittest.TestCase):
 
         # 1. Test /now during lesson 1 (e.g. 08:35 on Monday)
         dt_during_lesson = datetime.datetime(2026, 9, 7, 8, 35) # Monday
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_during_lesson
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_during_lesson):
             mock_reply.reset_mock()
             kalich.cmd_now(self.message)
             mock_reply.assert_called_once()
@@ -146,10 +143,7 @@ class TestKalichCommands(unittest.TestCase):
 
         # 2. Test /now during break (e.g. 09:55 on Monday)
         dt_during_break = datetime.datetime(2026, 9, 7, 9, 55)
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_during_break
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_during_break):
             mock_reply.reset_mock()
             kalich.cmd_now(self.message)
             mock_reply.assert_called_once()
@@ -161,10 +155,7 @@ class TestKalichCommands(unittest.TestCase):
 
         # 3. Test /now before lessons (e.g. 08:00 on Monday)
         dt_before = datetime.datetime(2026, 9, 7, 8, 0)
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_before
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_before):
             mock_reply.reset_mock()
             kalich.cmd_now(self.message)
             mock_reply.assert_called_once()
@@ -176,10 +167,7 @@ class TestKalichCommands(unittest.TestCase):
 
         # 4. Test /now after lessons (e.g. 12:00 on Monday)
         dt_after = datetime.datetime(2026, 9, 7, 12, 0)
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_after
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_after):
             mock_reply.reset_mock()
             kalich.cmd_now(self.message)
             mock_reply.assert_called_once()
@@ -188,10 +176,7 @@ class TestKalichCommands(unittest.TestCase):
             self.assertIn("Пар больше нет", reply_text)
 
         # 5. Test /next during lesson 1 (08:35)
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_during_lesson
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_during_lesson):
             mock_reply.reset_mock()
             kalich.cmd_next(self.message)
             mock_reply.assert_called_once()
@@ -202,10 +187,7 @@ class TestKalichCommands(unittest.TestCase):
             self.assertIn("Через: 30м", reply_text)
 
         # 6. Test /next during break (09:55)
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_during_break
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_during_break):
             mock_reply.reset_mock()
             kalich.cmd_next(self.message)
             mock_reply.assert_called_once()
@@ -216,10 +198,7 @@ class TestKalichCommands(unittest.TestCase):
             self.assertIn("Через: 5м", reply_text)
 
         # 7. Test /next after lessons (12:00)
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            mock_dt.now.return_value = dt_after
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_after):
             mock_reply.reset_mock()
             kalich.cmd_next(self.message)
             mock_reply.assert_called_once()
@@ -230,11 +209,7 @@ class TestKalichCommands(unittest.TestCase):
         # 8. Test merged block of consecutive identical lessons
         merged_lessons = ["Информатика (204)", "Информатика (204)", "Физика (201)"]
         kalich.save_schedule_to_db(1, 101, 1, "test_h2", json.dumps(merged_lessons), "2026-09-08")
-        with patch('src.bot.commands.student.datetime') as mock_dt:
-            # During first half of block (08:35)
-            mock_dt.now.return_value = dt_during_lesson
-            mock_dt.strptime = datetime.datetime.strptime
-
+        with patch('src.bot.commands.student.now_msk', return_value=dt_during_lesson):
             mock_reply.reset_mock()
             kalich.cmd_now(self.message)
             mock_reply.assert_called_once()

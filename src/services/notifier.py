@@ -4,7 +4,7 @@ import json
 import hashlib
 import logging
 from datetime import datetime
-from src.config import SPECIAL_CHATS
+from src.config import SPECIAL_CHATS, now_msk
 from src.database import (
     get_db_connection,
     extract_room,
@@ -193,7 +193,7 @@ def morning_broadcast():
     sent_today = False
     while True:
         try:
-            now = datetime.now()
+            now = now_msk()
             if now.hour == 7 and now.minute == 0 and now.isoweekday() <= 5 and not sent_today:
                 day = now.isoweekday()
                 data = get_all_schedules_for_day(day)
@@ -240,7 +240,7 @@ def morning_broadcast():
 def check_loop():
     while True:
         try:
-            now = datetime.now()
+            now = now_msk()
             is_silent = (now.hour >= 23 or now.hour < 6)
             wd = now.isoweekday()
             days = [wd] if wd <= 5 else []
@@ -278,7 +278,7 @@ def check_loop():
 def get_status():
     """Определяет статус текущего занятия (work/rest), оставшееся время и индекс текущей пары."""
     from src.config import CALLS
-    now = datetime.now()
+    now = now_msk()
     curr = now.strftime("%H:%M")
     wd = now.isoweekday()
     if wd > 5:

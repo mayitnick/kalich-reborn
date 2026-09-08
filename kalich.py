@@ -53,7 +53,7 @@ from src.config import (
     APPROVED_TEACHER_IDS, SYSTEM_FILTERS, CALLS, SCHEDULE_CACHE,
     waiting_for_department, user_department, waiting_for_teacher_dept,
     waiting_for_teacher_rooms, waiting_for_move, waiting_for_stats_dates,
-    stats_context, requests_get_no_proxy
+    stats_context, requests_get_no_proxy, MSK_TZ, now_msk
 )
 from src.database import (
     get_db_connection, init_db, save_schedule_to_db, get_all_schedules_for_day,
