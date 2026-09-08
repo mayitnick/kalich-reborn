@@ -34,39 +34,31 @@ def get_next_block_info(ctx: AppContext, cid: int, department: int, gid: int,
             return None
         now_dt = datetime.now()
         curr_time = now_dt.strftime("%H:%M")
-        next_idx = None
+        curr_dt = datetime.strptime(curr_time, "%H:%M")
         calls = ctx.config.CALLS
-
-        if current_idx is not None:
-            def clean_n(t):
-                return re.sub(r'\(?\d{2,4}[А-Яа-я]?\)?', '', str(t)).strip().lower()
-            target_n = clean_n(lessons[current_idx])
-            check_idx = current_idx
-            while check_idx < len(lessons) - 1 and clean_n(lessons[check_idx + 1]) == target_n:
-                check_idx += 1
-            if check_idx + 1 < len(lessons):
-                next_idx = check_idx + 1
-        else:
-            for i, call in enumerate(calls):
-                if call[0] > curr_time and i < len(lessons):
-                    next_idx = i
-                    break
-
-        if next_idx is None or next_idx >= len(lessons):
+        total = min(len(lessons), len(calls))
+        if total == 0:
             return None
 
-        def clean_n(t):
-            return re.sub(r'\(?\d{2,4}[А-Яа-я]?\)?', '', str(t)).strip().lower()
+        if current_idx is not None:
+            next_idx = current_idx + 1
+        else:
+            first_start = datetime.strptime(calls[0][0], "%H:%M")
+            if curr_dt < first_start:
+                next_idx = 0
+            else:
+                next_idx = None
+                for i in range(total):
+                    end_dt = datetime.strptime(calls[i][1], "%H:%M")
+                    if curr_dt < end_dt:
+                        next_idx = i + 1
+                        break
 
-        next_name_raw = clean_n(lessons[next_idx])
-        block_count = 1
-        temp_idx = next_idx
-        while temp_idx < len(lessons) - 1 and clean_n(lessons[temp_idx + 1]) == next_name_raw:
-            temp_idx += 1
-            block_count += 1
+        if next_idx is None or next_idx >= total:
+            return None
 
         start_time = calls[next_idx][0]
-        td = datetime.strptime(start_time, "%H:%M") - datetime.strptime(curr_time, "%H:%M")
+        td = datetime.strptime(start_time, "%H:%M") - curr_dt
         h, m = td.seconds // 3600, (td.seconds // 60) % 60
         rem_str = f"{f'{h}ч ' if h > 0 else ''}{m}м"
 
@@ -82,7 +74,7 @@ def get_next_block_info(ctx: AppContext, cid: int, department: int, gid: int,
         clean_name = lines[0] if lines else str(lessons[next_idx])
         return {
             "name": clean_name,
-            "count": block_count,
+            "count": 1,
             "time_to": rem_str,
             "raw_name": lessons[next_idx]
         }
@@ -138,104 +130,227 @@ def refresh_gloris_schedule(ctx: AppContext, mons: list, day: int):
 
 
 class NowCommand(BaseCommand):
-    """Текущая пара и прогресс-бар до её завершения."""
+    """Текущая пара, оставшееся время и следующий урок."""
     name = "now"
     aliases = ["сейчас", "пара"]
-    description = "Текущая пара и прогресс-бар до её завершения"
+    description = "Текущая пара, оставшееся время и следующий урок"
     requires = ["db", "notifier", "config"]
 
     def execute(self, message: Message, ctx: AppContext, **kwargs):
         if ctx.db.is_teacher(message.chat.id):
             return cmd_teacher_now(message)
 
-        status, _, idx = ctx.notifier.get_status()
-        if status == "rest" or idx is None:
-            return ctx.reply(message, ctx.wrap_code("Отдыхай\n(Используй /db)") + "\n\n/db")
+        now_dt = datetime.now()
+        day = now_dt.isoweekday()
+        if day > 5:
+            return ctx.reply(message, ctx.wrap_code("Отдыхай (выходной)\n(Используй /db)") + "\n\n/db")
 
         mons = ctx.db.monitor_manager.get_user_monitors(message.chat.id)
         if not mons:
-            return
+            return ctx.reply(message, "❌ Нет подписок. Сначала отправь номер группы.")
 
-        day = datetime.now().isoweekday()
         all_data = ctx.db.get_all_schedules_for_day(day)
         all_data = ctx.db.apply_teacher_overrides(all_data, day)
         m = mons[0]
         key = (m['department'], m['group_id'])
-        lessons = all_data.get(key)
+        lessons = all_data.get(key, [])
+        calls = ctx.config.CALLS
+        total_lessons = min(len(lessons), len(calls))
 
-        if lessons and len(lessons) > idx:
-            curr_l_raw = lessons[idx]
+        if not lessons or total_lessons == 0:
+            return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
-            def clean_n(t):
-                return re.sub(r'\(?\d{2,4}[А-Яа-я]?\)?', '', str(t)).strip().lower()
-
-            target_n = clean_n(curr_l_raw)
-            first_idx = idx
-            while first_idx > 0 and clean_n(lessons[first_idx - 1]) == target_n:
-                first_idx -= 1
-            last_idx = idx
-            while last_idx < len(lessons) - 1 and clean_n(lessons[last_idx + 1]) == target_n:
-                last_idx += 1
-
-            now_dt = datetime.now()
-            fmt = "%H:%M"
-            calls = ctx.config.CALLS
-            start_dt = datetime.strptime(calls[first_idx][0], fmt)
-            end_dt = datetime.strptime(calls[last_idx][1], fmt)
-            curr_dt = datetime.strptime(now_dt.strftime(fmt), fmt)
-
-            total_sec = (end_dt - start_dt).seconds
-            elapsed_sec = (curr_dt - start_dt).seconds
-            percent = min(100, max(0, (elapsed_sec / total_sec) * 100))
-            bar = "█" * int(percent // 10) + "░" * (10 - int(percent // 10))
-
+        def get_formatted_lesson(idx):
             lines = ctx.notifier.format_with_overlap(
                 message.chat.id,
                 m['department'],
                 m['group_id'],
                 day,
                 idx,
-                str(curr_l_raw),
+                str(lessons[idx]),
                 all_data
             )
-            res_line = lines[0] if lines else str(curr_l_raw)
-            td = end_dt - curr_dt
+            name = lines[0] if lines else str(lessons[idx])
+            if len(lines) > 1:
+                name += f"\n   {lines[1]}"
+            return name
+
+        curr_time = now_dt.strftime("%H:%M")
+        curr_dt = datetime.strptime(curr_time, "%H:%M")
+
+        # До начала занятий
+        first_start = datetime.strptime(calls[0][0], "%H:%M")
+        if curr_dt < first_start:
+            td = first_start - curr_dt
             h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
             rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
-            lbl = "До конца блока:" if last_idx > first_idx else "До конца пары:"
-            ctx.reply(message, ctx.wrap_code(f"{res_line}\n{bar} {int(percent)}%\n{lbl} {rem}"))
+            next_name = get_formatted_lesson(0)
+            res = (
+                f"Занятия еще не начались\n"
+                f"До начала 1-го урока: {rem}\n\n"
+                f"Следующий: 1. {next_name} ({calls[0][0]} - {calls[0][1]})"
+            )
+            return ctx.reply(message, ctx.wrap_code(res))
+
+        # После всех уроков
+        last_end = datetime.strptime(calls[total_lessons - 1][1], "%H:%M")
+        if curr_dt >= last_end:
+            return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
+        # Во время урока
+        for i in range(total_lessons):
+            start_dt = datetime.strptime(calls[i][0], "%H:%M")
+            end_dt = datetime.strptime(calls[i][1], "%H:%M")
+            if start_dt <= curr_dt <= end_dt:
+                curr_name = get_formatted_lesson(i)
+                total_sec = (end_dt - start_dt).seconds
+                elapsed_sec = max(0, (curr_dt - start_dt).seconds)
+                percent = min(100, max(0, int((elapsed_sec / total_sec) * 100))) if total_sec else 0
+                bar = "█" * (percent // 10) + "░" * (10 - (percent // 10))
+
+                td = end_dt - curr_dt
+                h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
+                rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
+
+                if i + 1 < total_lessons:
+                    next_name = get_formatted_lesson(i + 1)
+                    next_str = f"{i + 2}. {next_name} ({calls[i + 1][0]} - {calls[i + 1][1]})"
+                else:
+                    next_str = "пар больше нет"
+
+                res = (
+                    f"Сейчас: {i + 1}. {curr_name}\n"
+                    f"Время: {calls[i][0]} - {calls[i][1]}\n"
+                    f"{bar} {percent}%\n"
+                    f"До конца урока: {rem}\n\n"
+                    f"Следующий: {next_str}"
+                )
+                return ctx.reply(message, ctx.wrap_code(res))
+
+        # Во время перемены
+        for i in range(total_lessons - 1):
+            break_start = datetime.strptime(calls[i][1], "%H:%M")
+            break_end = datetime.strptime(calls[i + 1][0], "%H:%M")
+            if break_start < curr_dt < break_end:
+                td = break_end - curr_dt
+                h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
+                rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
+                next_name = get_formatted_lesson(i + 1)
+                res = (
+                    f"Сейчас: Перемена\n"
+                    f"До конца перемены: {rem}\n\n"
+                    f"Следующий: {i + 2}. {next_name} ({calls[i + 1][0]} - {calls[i + 1][1]})"
+                )
+                return ctx.reply(message, ctx.wrap_code(res))
+
+        return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
 
 class NextCommand(BaseCommand):
-    """Информация о следующей предстоящей паре."""
+    """Информация о следующем предстоящем уроке."""
     name = "next"
     aliases = ["далее", "следующая"]
-    description = "Информация о следующей предстоящей паре"
+    description = "Информация о следующем предстоящем уроке"
     requires = ["db", "notifier", "config"]
 
     def execute(self, message: Message, ctx: AppContext, **kwargs):
         if ctx.db.is_teacher(message.chat.id):
             return cmd_teacher_next(message)
 
+        now_dt = datetime.now()
+        day = now_dt.isoweekday()
+        if day > 5:
+            return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
         mons = ctx.db.monitor_manager.get_user_monitors(message.chat.id)
         if not mons:
             return ctx.reply(message, "❌ Нет подписок. Сначала отправь номер группы.")
 
-        day = datetime.now().isoweekday()
-        data = ctx.db.get_all_schedules_for_day(day)
+        all_data = ctx.db.get_all_schedules_for_day(day)
+        all_data = ctx.db.apply_teacher_overrides(all_data, day)
         m = mons[0]
-        status, _, idx = ctx.notifier.get_status()
-        info = get_next_block_info(ctx, message.chat.id, m['department'], m['group_id'], day, data, idx)
+        key = (m['department'], m['group_id'])
+        lessons = all_data.get(key, [])
+        calls = ctx.config.CALLS
+        total_lessons = min(len(lessons), len(calls))
 
-        if info:
-            res = (
-                f"Далее: {info['name']}\n"
-                f"Длительность: {format_lessons_count(int(info['count']))}\n"
-                f"Через: {info['time_to']}"
+        if not lessons or total_lessons == 0:
+            return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
+        def get_formatted_lesson(idx):
+            lines = ctx.notifier.format_with_overlap(
+                message.chat.id,
+                m['department'],
+                m['group_id'],
+                day,
+                idx,
+                str(lessons[idx]),
+                all_data
             )
-            ctx.reply(message, ctx.wrap_code(res))
-        else:
-            ctx.reply(message, ctx.wrap_code("Пар больше нет") + "\n\n/db")
+            name = lines[0] if lines else str(lessons[idx])
+            if len(lines) > 1:
+                name += f"\n   {lines[1]}"
+            return name
+
+        curr_time = now_dt.strftime("%H:%M")
+        curr_dt = datetime.strptime(curr_time, "%H:%M")
+
+        # До начала уроков
+        first_start = datetime.strptime(calls[0][0], "%H:%M")
+        if curr_dt < first_start:
+            td = first_start - curr_dt
+            h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
+            rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
+            next_name = get_formatted_lesson(0)
+            res = (
+                f"Далее: 1. {next_name}\n"
+                f"Время: {calls[0][0]} - {calls[0][1]}\n"
+                f"Через: {rem}"
+            )
+            return ctx.reply(message, ctx.wrap_code(res))
+
+        # После всех уроков
+        last_end = datetime.strptime(calls[total_lessons - 1][1], "%H:%M")
+        if curr_dt >= last_end:
+            return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
+        # Во время урока
+        for i in range(total_lessons):
+            start_dt = datetime.strptime(calls[i][0], "%H:%M")
+            end_dt = datetime.strptime(calls[i][1], "%H:%M")
+            if start_dt <= curr_dt <= end_dt:
+                if i + 1 < total_lessons:
+                    next_start = datetime.strptime(calls[i + 1][0], "%H:%M")
+                    td = next_start - curr_dt
+                    h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
+                    rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
+                    next_name = get_formatted_lesson(i + 1)
+                    res = (
+                        f"Далее: {i + 2}. {next_name}\n"
+                        f"Время: {calls[i + 1][0]} - {calls[i + 1][1]}\n"
+                        f"Через: {rem}"
+                    )
+                    return ctx.reply(message, ctx.wrap_code(res))
+                else:
+                    return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
+
+        # Во время перемены
+        for i in range(total_lessons - 1):
+            break_start = datetime.strptime(calls[i][1], "%H:%M")
+            break_end = datetime.strptime(calls[i + 1][0], "%H:%M")
+            if break_start < curr_dt < break_end:
+                td = break_end - curr_dt
+                h, m_rem = td.seconds // 3600, (td.seconds // 60) % 60
+                rem = f"{f'{h}ч ' if h > 0 else ''}{m_rem}м"
+                next_name = get_formatted_lesson(i + 1)
+                res = (
+                    f"Далее: {i + 2}. {next_name}\n"
+                    f"Время: {calls[i + 1][0]} - {calls[i + 1][1]}\n"
+                    f"Через: {rem}"
+                )
+                return ctx.reply(message, ctx.wrap_code(res))
+
+        return ctx.reply(message, ctx.wrap_code("Пар больше нет\n(Используй /db)") + "\n\n/db")
 
 
 class ScheduleTodayCommand(BaseCommand):
