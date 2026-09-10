@@ -10,6 +10,7 @@ from src.config import (
     GROUPS_CACHE_FILE,
     SYSTEM_FILTERS,
 )
+from src.database import extract_room
 
 
 def requests_get_no_proxy(*args, **kwargs):

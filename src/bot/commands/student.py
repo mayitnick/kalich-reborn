@@ -556,7 +556,7 @@ class FindByRoomCommand(BaseCommand):
             group_name = ctx.parser.GROUP_ID_TO_NAME.get(dep, {}).get(gid, "?")
             for idx in range(min(len(lessons), max_lessons)):
                 l_str = str(lessons[idx])
-                room = ctx.parser.extract_room(l_str)
+                room = ctx.db.extract_room(l_str)
                 if room and room_target in room:
                     applied = ctx.db.custom_names_manager.apply(
                         message.chat.id, l_str

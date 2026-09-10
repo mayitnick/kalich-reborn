@@ -102,6 +102,10 @@ class DatabaseService:
         """Устанавливает значение настройки пользователя."""
         self._mod.set_user_setting(chat_id, key, value)
 
+    def extract_room(self, lesson_text: str) -> Optional[str]:
+        """Извлекает номер кабинета из текста пары."""
+        return self._mod.extract_room(lesson_text)
+
     @property
     def monitor_manager(self):
         """Менеджер подписок пользователей на группы."""
@@ -141,6 +145,10 @@ class ParserService:
     def get_department_groups(self, department: int) -> List[str]:
         """Возвращает отсортированный список всех групп выбранного отделения."""
         return self._mod.get_department_groups(department)
+
+    def extract_room(self, lesson_text: str) -> Optional[str]:
+        """Извлекает номер кабинета из текста пары."""
+        return getattr(self._mod, 'extract_room', _database.extract_room)(lesson_text)
 
     def load_groups_cache(self) -> None:
         """Загружает кэш групп из файла."""
