@@ -24,6 +24,37 @@ from src.bot.instance import bot, wrap_code
 logger = logging.getLogger(__name__)
 
 
+def compute_schedule_diff(old_lessons: list, new_lessons: list) -> str:
+    """Вычисляет детальную разницу (Diff) между старым и новым расписанием (Phase 6.2)."""
+    if not old_lessons:
+        return ""
+    diff_lines = []
+    max_len = max(len(old_lessons), len(new_lessons))
+    for i in range(max_len):
+        old_item = (old_lessons[i] if i < len(old_lessons) else "").strip()
+        new_item = (new_lessons[i] if i < len(new_lessons) else "").strip()
+        if old_item == new_item:
+            continue
+        if old_item and not new_item:
+            diff_lines.append(f"- {i+1} пара: [Отменена] {old_item}")
+        elif not old_item and new_item:
+            diff_lines.append(f"- {i+1} пара: [Добавлена] {new_item}")
+        else:
+            diff_lines.append(f"- {i+1} пара: [Было] {old_item} ➔ [Стало] {new_item}")
+
+    return "\n".join(diff_lines)
+
+
+def get_first_lesson_start(lessons: list) -> tuple[int, str]:
+    """Определяет индекс и время начала первой реальной пары для Smart Alarm (Phase 6.1)."""
+    from src.config import CALLS
+    for i, lesson in enumerate(lessons):
+        if lesson and str(lesson).strip():
+            start_time = CALLS[i][0] if i < len(CALLS) else "08:30"
+            return i + 1, start_time
+    return 1, "08:30"
+
+
 def format_with_overlap(cid, department, gid, day, idx, raw_text, all_day_data):
     """Форматирует строку пары с учетом кастомных названий и совмещений кабинетов."""
     if not raw_text or raw_text == "Кл/час":
@@ -85,31 +116,63 @@ def send_updates_for_day(day, data):
         msg_hash = hashlib.md5(msg.encode()).hexdigest()
 
         cur = conn.execute(
-            "SELECT last_msg_hash FROM user_notifications WHERE chat_id=? AND department=? AND group_id=? AND day=?",
+            "SELECT last_msg_hash, last_message_id FROM user_notifications WHERE chat_id=? AND department=? AND group_id=? AND day=?",
             (m['chat_id'], dep, gid, day)
         )
         row = cur.fetchone()
         thread_id = m.get('message_thread_id') or SPECIAL_CHATS.get(m['chat_id'])
         if row is None:
             try:
-                bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=thread_id)
+                sent = bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=thread_id)
+                msg_id = getattr(sent, 'message_id', None)
                 conn.execute(
-                    "INSERT INTO user_notifications (chat_id, department, group_id, day, last_msg_hash) VALUES (?, ?, ?, ?, ?)",
-                    (m['chat_id'], dep, gid, day, msg_hash)
+                    "INSERT INTO user_notifications (chat_id, department, group_id, day, last_msg_hash, last_message_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (m['chat_id'], dep, gid, day, msg_hash, msg_id)
                 )
                 conn.commit()
             except Exception as e:
                 logger.error(f"Error sending update: {e}")
         elif row[0] != msg_hash:
+            last_msg_id = row[1] if len(row) > 1 else None
+            # Извлекаем старое расписание для формирования Diff (Phase 6.2)
+            cur_old = conn.execute(
+                "SELECT lessons_text FROM schedules WHERE group_id=? AND day=? AND department=?",
+                (gid, day, dep)
+            ).fetchone()
+            old_lessons = json.loads(cur_old[0]) if cur_old and cur_old[0] else []
+            diff_text = compute_schedule_diff(old_lessons, lessons)
+
+            full_msg = msg
+            if diff_text:
+                full_msg = f"⚡ Изменения на {day_of_week}:\n{diff_text}\n\n{msg}"
+
+            edited = False
+            # Механизм Edit Message для предотвращения спама новыми сообщениями (Phase 3.5)
+            if last_msg_id:
+                try:
+                    bot.edit_message_text(
+                        wrap_code(full_msg),
+                        chat_id=m['chat_id'],
+                        message_id=last_msg_id,
+                        parse_mode='Markdown'
+                    )
+                    edited = True
+                except Exception as e:
+                    logger.debug(f"Could not edit previous message, sending new: {e}")
+            if not edited:
+                try:
+                    sent = bot.send_message(m['chat_id'], wrap_code(full_msg), parse_mode='Markdown', message_thread_id=thread_id)
+                    last_msg_id = getattr(sent, 'message_id', None)
+                except Exception as e:
+                    logger.error(f"Error sending update: {e}")
             try:
-                bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=thread_id)
                 conn.execute(
-                    "UPDATE user_notifications SET last_msg_hash=? WHERE chat_id=? AND department=? AND group_id=? AND day=?",
-                    (msg_hash, m['chat_id'], dep, gid, day)
+                    "UPDATE user_notifications SET last_msg_hash=?, last_message_id=? WHERE chat_id=? AND department=? AND group_id=? AND day=?",
+                    (msg_hash, last_msg_id, m['chat_id'], dep, gid, day)
                 )
                 conn.commit()
             except Exception as e:
-                logger.error(f"Error sending update: {e}")
+                logger.error(f"Error updating user_notifications: {e}")
     conn.close()
 
 
@@ -207,7 +270,12 @@ def morning_broadcast():
                     for m in ms:
                         lessons = data.get((m['department'], m['group_id']))
                         if lessons:
-                            res = f"☀️ Доброе утро!\n📅 Расписание: {m['group_name']}\n\n"
+                            first_idx, start_time = get_first_lesson_start(lessons)
+                            alarm_note = ""
+                            if first_idx > 1:
+                                alarm_note = f"\n💤 Первой пары нет, поспи ещё часок! На пары к {start_time} 🦊💤\n"
+                            
+                            res = f"☀️ Доброе утро!{alarm_note}\n📅 Расписание: {m['group_name']}\n\n"
                             cnt = 1
                             for i, l in enumerate(lessons):
                                 lines = format_with_overlap(cid, m['department'], m['group_id'], day, i, str(l), data)
@@ -237,6 +305,11 @@ def morning_broadcast():
         time.sleep(30)
 
 
+# Буфер стабилизации рассылок (Phase 3.5 Debounce)
+_DEBOUNCE_BUFFER = {}
+_DEBOUNCE_COOLDOWN = 300.0  # 5 минут тишины перед отправкой изменений по дню
+
+
 def check_loop():
     while True:
         try:
@@ -246,9 +319,20 @@ def check_loop():
             days = [wd] if wd <= 5 else []
             days.append(wd + 1 if wd < 5 else 1)
 
+            current_time = time.time()
+            # Проверяем буфер стабилизации: если по дню прошло время cooldown, рассылаем
+            for d in list(_DEBOUNCE_BUFFER.keys()):
+                entry = _DEBOUNCE_BUFFER[d]
+                if current_time - entry['last_change'] >= _DEBOUNCE_COOLDOWN:
+                    del _DEBOUNCE_BUFFER[d]
+                    if not is_silent:
+                        data = get_all_schedules_for_day(d)
+                        send_updates_for_day(d, data)
+
             for d in set(days):
                 data = get_all_schedules_for_day(d)
                 date_str = get_date_for_weekday(d)
+                day_changed = False
 
                 for name, info in GROUP_NAME_TO_ID.items():
                     dep, gid = info[0], info[1]
@@ -266,13 +350,17 @@ def check_loop():
 
                     if not old or old[0] != h:
                         save_schedule_to_db(dep, gid, d, h, json.dumps(raw, ensure_ascii=False), date_str)
-                        if is_silent:
-                            continue
-                        data = get_all_schedules_for_day(d)
-                send_updates_for_day(d, data)
+                        day_changed = True
+
+                if day_changed:
+                    # Обновляем окно стабилизации вместо мгновенного спама (Phase 3.5)
+                    _DEBOUNCE_BUFFER[d] = {
+                        'last_change': time.time(),
+                        'date_str': date_str
+                    }
         except Exception as e:
             logger.error(f"Check loop error: {e}")
-        time.sleep(600)
+        time.sleep(60)
 
 
 def get_status():

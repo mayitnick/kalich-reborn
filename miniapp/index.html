@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Калич — Расписание 2.0</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-content">
+        <div class="logo-title">
+          <span class="avatar-icon">🎧</span>
+          <span class="app-name">Калич 2.0</span>
+        </div>
+        <button id="groupSelectorBtn" class="group-btn">Выбрать группу</button>
+      </div>
+      
+      <!-- Weekday navigation tabs -->
+      <nav class="days-nav">
+        <button class="day-tab" data-day="1">ПН</button>
+        <button class="day-tab" data-day="2">ВТ</button>
+        <button class="day-tab" data-day="3">СР</button>
+        <button class="day-tab" data-day="4">ЧТ</button>
+        <button class="day-tab" data-day="5">ПТ</button>
+        <button class="day-tab" data-day="6">СБ</button>
+      </nav>
+    </header>
+
+    <!-- Main schedule card container -->
+    <main class="schedule-viewport" id="scheduleViewport">
+      <div class="schedule-container" id="scheduleList">
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <p>Загрузка расписания...</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- Group Selection Modal -->
+    <div class="modal" id="groupModal">
+      <div class="modal-backdrop" id="modalBackdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Выберите группу</h3>
+          <button class="close-btn" id="closeModalBtn">&times;</button>
+        </div>
+        <input type="text" id="groupSearchInput" class="group-search" placeholder="Поиск (напр. ИС 21-25)...">
+        <div class="groups-list" id="groupsList"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

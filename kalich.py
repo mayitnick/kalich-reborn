@@ -56,11 +56,12 @@ from src.config import (
     stats_context, requests_get_no_proxy, MSK_TZ, now_msk
 )
 from src.database import (
-    get_db_connection, init_db, save_schedule_to_db, get_all_schedules_for_day,
+    get_db_connection, db_transaction, db_cursor, init_db, save_schedule_to_db, get_all_schedules_for_day,
     get_schedule_history_for_date, get_date_for_weekday, extract_room,
     parse_date_range, is_teacher, get_teacher_info, get_teacher_schedule,
     apply_teacher_overrides, save_teacher_override, get_user_settings,
     set_user_setting, save_item_sticker, get_item_sticker,
+    add_homework_note, get_homework_notes, delete_homework_note,
     MonitorManager, CustomNamesManager, monitor_manager, custom_names_manager
 )
 from src.services.parser import (
@@ -77,7 +78,7 @@ from src.services.analytics import (
 from src.services.notifier import (
     format_with_overlap, send_updates_for_day,
     send_teacher_override_notifications_for_day, teacher_notification_loop,
-    morning_broadcast, check_loop, get_status
+    morning_broadcast, check_loop, get_status, compute_schedule_diff, get_first_lesson_start
 )
 from src.bot.instance import bot, reply_safe, wrap_code, logger
 from src.bot.keyboards import (

@@ -4,6 +4,7 @@ import json
 import sqlite3
 import logging
 from datetime import datetime, timedelta
+from contextlib import contextmanager
 import src.config as config
 from src.config import (
     DB_FILE,
@@ -25,6 +26,31 @@ def get_db_connection():
     return conn
 
 
+@contextmanager
+def db_transaction():
+    """Контекстный менеджер транзакций SQLite с авто-коммитом, откатом при ошибке и закрытием."""
+    conn = get_db_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def db_cursor():
+    """Контекстный менеджер курсора SQLite с автоматическим управлением транзакцией."""
+    with db_transaction() as conn:
+        cursor = conn.cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
+
 def init_db():
     conn = get_db_connection()
     # Таблица для стикеров (для совместимости)
@@ -35,7 +61,12 @@ def init_db():
     # Таблица для уведомлений
     conn.execute('''CREATE TABLE IF NOT EXISTS user_notifications
                     (chat_id INTEGER, department INTEGER, group_id INTEGER, day INTEGER,
-                     last_msg_hash TEXT, PRIMARY KEY (chat_id, department, group_id, day))''')
+                     last_msg_hash TEXT, last_message_id INTEGER,
+                     PRIMARY KEY (chat_id, department, group_id, day))''')
+    try:
+        conn.execute("ALTER TABLE user_notifications ADD COLUMN last_message_id INTEGER")
+    except Exception as e:
+        logger.debug(f"ALTER TABLE user_notifications warning: {e}")
 
     # Таблица schedules (кэш текущей недели)
     cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schedules'")
@@ -96,6 +127,38 @@ def init_db():
         conn.execute("ALTER TABLE teacher_room_overrides ADD COLUMN date TEXT")
     except Exception:
         pass
+
+    # Таблица активных мониторов (Phase 2.2)
+    conn.execute('''CREATE TABLE IF NOT EXISTS active_monitors
+                    (id TEXT PRIMARY KEY,
+                     chat_id INTEGER,
+                     group_id INTEGER,
+                     department INTEGER,
+                     data_json TEXT)''')
+
+    # Таблица кастомных названий предметов (Phase 2.2)
+    conn.execute('''CREATE TABLE IF NOT EXISTS custom_names
+                    (chat_id INTEGER,
+                     item_key TEXT,
+                     custom_name TEXT,
+                     PRIMARY KEY (chat_id, item_key))''')
+
+    # Таблица кэша групп (Phase 2.2)
+    conn.execute('''CREATE TABLE IF NOT EXISTS groups_cache
+                    (group_name TEXT PRIMARY KEY,
+                     department INTEGER,
+                     group_id INTEGER)''')
+
+    # Таблица заметок и домашних заданий (Phase 6.4)
+    conn.execute('''CREATE TABLE IF NOT EXISTS homework_notes
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     chat_id INTEGER,
+                     group_id INTEGER,
+                     department INTEGER,
+                     subject TEXT,
+                     note TEXT,
+                     deadline_date TEXT,
+                     created_at TEXT)''')
 
     conn.commit()
     conn.close()
@@ -365,6 +428,52 @@ def get_item_sticker(chat_id, raw_item_name):
     return None
 
 
+def add_homework_note(chat_id: int, group_id: int, department: int, subject: str, note: str, deadline_date: str = "") -> int:
+    """Добавляет заметку или домашнее задание (Phase 6.4)."""
+    with db_transaction() as conn:
+        cursor = conn.execute(
+            "INSERT INTO homework_notes (chat_id, group_id, department, subject, note, deadline_date, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, group_id, department, subject, note, deadline_date, datetime.now().isoformat())
+        )
+        return cursor.lastrowid
+
+
+def get_homework_notes(chat_id: int, group_id: int = None) -> list[dict]:
+    """Возвращает список заметок/ДЗ пользователя или группы (Phase 6.4)."""
+    conn = get_db_connection()
+    if group_id:
+        rows = conn.execute(
+            "SELECT id, chat_id, group_id, department, subject, note, deadline_date, created_at "
+            "FROM homework_notes WHERE group_id=? ORDER BY id DESC",
+            (group_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, chat_id, group_id, department, subject, note, deadline_date, created_at "
+            "FROM homework_notes WHERE chat_id=? ORDER BY id DESC",
+            (chat_id,)
+        ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "chat_id": r[1], "group_id": r[2], "department": r[3],
+            "subject": r[4], "note": r[5], "deadline_date": r[6], "created_at": r[7]
+        }
+        for r in rows
+    ]
+
+
+def delete_homework_note(note_id: int, chat_id: int) -> bool:
+    """Удаляет заметку по ID (Phase 6.4)."""
+    with db_transaction() as conn:
+        res = conn.execute(
+            "DELETE FROM homework_notes WHERE id=? AND chat_id=?",
+            (note_id, chat_id)
+        )
+        return res.rowcount > 0
+
+
 # ====== МЕНЕДЖЕРЫ МОНИТОРОВ И КАСТОМНЫХ ИМЕН ======
 
 class MonitorManager:
@@ -373,6 +482,26 @@ class MonitorManager:
         self.load()
 
     def load(self):
+        self.active_monitors = {}
+        # Сначала пробуем загрузить из SQLite (Phase 2.2)
+        try:
+            conn = get_db_connection()
+            cur = conn.execute("SELECT id, chat_id, group_id, department, data_json FROM active_monitors")
+            rows = cur.fetchall()
+            conn.close()
+            if rows:
+                for row in rows:
+                    mid, cid, gid, dep, data_json = row
+                    mdata = json.loads(data_json) if data_json else {}
+                    mdata['chat_id'] = cid
+                    mdata['group_id'] = gid
+                    mdata['department'] = dep
+                    self.active_monitors[str(mid)] = mdata
+                return
+        except Exception as e:
+            logger.debug(f"Could not load monitors from SQLite: {e}")
+
+        # Fallback и миграция из JSON-файла
         if os.path.exists(MONITORS_FILE):
             try:
                 with open(MONITORS_FILE, 'r', encoding='utf-8') as f:
@@ -380,13 +509,34 @@ class MonitorManager:
                 for key, value in self.active_monitors.items():
                     if 'department' not in value:
                         value['department'] = 3
+                self.save()
             except Exception:
                 self.active_monitors = {}
 
     def save(self):
-        os.makedirs(os.path.dirname(MONITORS_FILE), exist_ok=True)
-        with open(MONITORS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.active_monitors, f, ensure_ascii=False, indent=2)
+        # 1. Сохранение в SQLite через db_transaction (Phase 2.2)
+        try:
+            with db_transaction() as conn:
+                conn.execute("DELETE FROM active_monitors")
+                for mid, m in self.active_monitors.items():
+                    cid = int(m.get("chat_id", 0))
+                    gid = int(m.get("group_id", 0))
+                    dep = int(m.get("department", 3))
+                    data_json = json.dumps(m, ensure_ascii=False)
+                    conn.execute(
+                        "INSERT INTO active_monitors (id, chat_id, group_id, department, data_json) VALUES (?, ?, ?, ?, ?)",
+                        (str(mid), cid, gid, dep, data_json)
+                    )
+        except Exception as e:
+            logger.error(f"Error saving active_monitors to SQLite: {e}")
+
+        # 2. Обратная совместимость с JSON
+        try:
+            os.makedirs(os.path.dirname(MONITORS_FILE), exist_ok=True)
+            with open(MONITORS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.active_monitors, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Error writing monitors JSON fallback: {e}")
 
     def get_user_monitors(self, chat_id):
         return [m for m in self.active_monitors.values() if str(m["chat_id"]) == str(chat_id)]
@@ -398,17 +548,53 @@ class CustomNamesManager:
         self.load()
 
     def load(self):
+        self.data = {}
+        # Сначала пробуем загрузить из SQLite (Phase 2.2)
+        try:
+            conn = get_db_connection()
+            cur = conn.execute("SELECT chat_id, item_key, custom_name FROM custom_names")
+            rows = cur.fetchall()
+            conn.close()
+            if rows:
+                for cid, key, val in rows:
+                    cid_str = str(cid)
+                    if cid_str not in self.data:
+                        self.data[cid_str] = {}
+                    self.data[cid_str][key] = val
+                return
+        except Exception as e:
+            logger.debug(f"Could not load custom names from SQLite: {e}")
+
+        # Fallback и миграция из JSON-файла
         if os.path.exists(CUSTOM_NAMES_FILE):
             try:
                 with open(CUSTOM_NAMES_FILE, 'r', encoding='utf-8') as f:
                     self.data = json.load(f)
+                self.save()
             except Exception:
                 self.data = {}
 
     def save(self):
-        os.makedirs(os.path.dirname(CUSTOM_NAMES_FILE), exist_ok=True)
-        with open(CUSTOM_NAMES_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+        # 1. Сохранение в SQLite через db_transaction (Phase 2.2)
+        try:
+            with db_transaction() as conn:
+                conn.execute("DELETE FROM custom_names")
+                for cid_str, items in self.data.items():
+                    for k, v in items.items():
+                        conn.execute(
+                            "INSERT OR REPLACE INTO custom_names (chat_id, item_key, custom_name) VALUES (?, ?, ?)",
+                            (int(cid_str), k, v)
+                        )
+        except Exception as e:
+            logger.error(f"Error saving custom_names to SQLite: {e}")
+
+        # 2. Обратная совместимость с JSON
+        try:
+            os.makedirs(os.path.dirname(CUSTOM_NAMES_FILE), exist_ok=True)
+            with open(CUSTOM_NAMES_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Error writing custom names JSON fallback: {e}")
 
     def set_name(self, cid, old, new):
         cid = str(cid)
@@ -416,7 +602,16 @@ class CustomNamesManager:
             self.data[cid] = {}
         key = re.sub(r'[^а-яА-Яa-zA-ZёЁ]', '', old).lower()
         if key:
-            self.data[cid][key] = str(new).strip()
+            val = str(new).strip()
+            self.data[cid][key] = val
+            try:
+                with db_transaction() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO custom_names (chat_id, item_key, custom_name) VALUES (?, ?, ?)",
+                        (int(cid), key, val)
+                    )
+            except Exception as e:
+                logger.error(f"Error persisting custom name override: {e}")
             self.save()
 
     def apply(self, cid, text):

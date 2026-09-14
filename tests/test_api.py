@@ -54,6 +54,7 @@ def api_url(memory_db):
     app.router.add_post('/api/sync', api_server.handle_sync)
     app.router.add_post('/api/settings', api_server.handle_settings)
     app.router.add_get('/api/analytics', api_server.handle_analytics)
+    app.router.add_get('/api/calendar/{department}/{group_id}.ics', api_server.handle_calendar_feed)
     app.router.add_post('/api/admin/fill', api_server.handle_admin_fill)
     app.router.add_post('/api/admin/flush', api_server.handle_admin_flush)
     
@@ -271,4 +272,57 @@ def test_api_health(api_url):
     assert data["status"] == "ok"
     assert data["database"] == "connected"
     assert data["groups_count"] >= 2
+
+
+def test_api_validation_and_auth_checks(api_url):
+    """Тестирование валидации входных данных и авторизации API (Phase 3.1 & 5.1)."""
+    # 1. Неверный департамент
+    invalid_dept_payload = {
+        'department': 99,
+        'day': 1,
+        'slot_idx': 0,
+        'group_id': 301,
+        'new_room': '101'
+    }
+    resp = requests.post(f"{api_url}/api/override", json=invalid_dept_payload)
+    assert resp.status_code == 400
+    assert "Validation error" in resp.json()["error"]
+
+    # 2. Неверный день
+    invalid_day_payload = {
+        'department': 3,
+        'day': 15,
+        'slot_idx': 0,
+        'group_id': 301,
+        'new_room': '101'
+    }
+    resp = requests.post(f"{api_url}/api/override", json=invalid_day_payload)
+    assert resp.status_code == 400
+
+    # 3. Неверный слот пары
+    invalid_slot_payload = {
+        'department': 3,
+        'day': 1,
+        'slot_idx': 99,
+        'group_id': 301,
+        'new_room': '101'
+    }
+    resp = requests.post(f"{api_url}/api/override", json=invalid_slot_payload)
+    assert resp.status_code == 400
+
+
+def test_api_calendar_ics(api_url):
+    """Тестирование живого фида расписания iCal / .ics (Phase 6.3)."""
+    lessons = ["Математика (302)", "Информатика (201)"]
+    kalich.save_schedule_to_db(3, 301, 1, "hash_cal", json.dumps(lessons), "2026-06-22")
+
+    resp = requests.get(f"{api_url}/api/calendar/3/301.ics")
+    assert resp.status_code == 200
+    assert "BEGIN:VCALENDAR" in resp.text
+    assert "BEGIN:VEVENT" in resp.text
+    assert "SUMMARY:Математика" in resp.text
+    assert "LOCATION:Кабинет 302" in resp.text
+    assert "END:VCALENDAR" in resp.text
+
+
 

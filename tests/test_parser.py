@@ -84,3 +84,60 @@ def test_get_department_groups():
     dept3 = kalich.get_department_groups(3)
     assert dept3 == ["ИС-21-25"]
 
+
+def test_fetch_lessons_html_fixtures(monkeypatch):
+    """Тестирование парсинга различных вариантов верстки Gloris с тегами <p> (Phase 5.1)."""
+    sample_html = """
+    <html>
+        <body>
+            <div class="lessons">
+                <p>1. Математика (302)</p>
+                <p>2. Физика (104) / Химия (205)</p>
+                <p>3. Информатика (201)</p>
+                <p>Разработано $cript</p>
+            </div>
+        </body>
+    </html>
+    """
+    class MockResp:
+        status_code = 200
+        text = sample_html
+
+    monkeypatch.setattr('kalich.requests_get_no_proxy', lambda *args, **kwargs: MockResp())
+    lessons = kalich.fetch_lessons(1, 201, 3)
+    assert len(lessons) == 3
+    assert "Математика (302)" in lessons[0]
+    assert "Физика (104)" in lessons[1]
+    assert "Информатика (201)" in lessons[2]
+    # Filtered out system string
+    assert not any("Разработано" in l for l in lessons)
+
+
+def test_teacher_schedule_generation(memory_db):
+    """Тестирование генератора расписания преподавателей (Phase 5.1)."""
+    # Сохраняем информацию о преподавателе с кабинетом 302
+    kalich.init_db()
+    conn = kalich.get_db_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO teachers (chat_id, department, rooms, name, status) VALUES (?, ?, ?, ?, 'approved')",
+        (99999, 3, '["302"]', 'Иванов И.И.')
+    )
+    conn.commit()
+    conn.close()
+
+    all_data = {
+        (3, 101): ["Математика (302)", "Физика (101)"],
+        (3, 102): ["Информатика (201)", "История (302)"]
+    }
+    kalich.GROUP_ID_TO_NAME = {3: {101: "Гр-101", 102: "Гр-102"}}
+
+    dept, rooms, schedule = kalich.get_teacher_schedule(99999, 1, all_data)
+    assert dept == 3
+    assert "302" in rooms
+    assert len(schedule) > 1
+    # Первая пара в кабинете 302 у Гр-101
+    assert any("Гр-101" in item[0] for item in schedule[0])
+    # Вторая пара в кабинете 302 у Гр-102
+    assert any("Гр-102" in item[0] for item in schedule[1])
+
+

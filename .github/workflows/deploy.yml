@@ -1,0 +1,54 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["Tests", "Lint"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Continuous Deployment to Production
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Configure SSH Key
+      env:
+        SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        SERVER_HOST: ${{ secrets.DEPLOY_SERVER_HOST }}
+        SERVER_USER: ${{ secrets.DEPLOY_SERVER_USER || 'kalich-deployer' }}
+      run: |
+        if [ -n "$SSH_PRIVATE_KEY" ] && [ -n "$SERVER_HOST" ]; then
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
+          echo "SSH configured successfully."
+        else
+          echo "No deployment credentials configured. Skipping remote execution."
+        fi
+
+    - name: Deploy on Remote Server
+      env:
+        SERVER_HOST: ${{ secrets.DEPLOY_SERVER_HOST }}
+        SERVER_USER: ${{ secrets.DEPLOY_SERVER_USER || 'kalich-deployer' }}
+      run: |
+        if [ -n "$SERVER_HOST" ]; then
+          ssh -o StrictHostKeyChecking=accept-new "$SERVER_USER@$SERVER_HOST" '
+            set -e
+            cd /opt/kalich || cd ~/kalich
+            git pull origin main
+            # Создаем резервную копию базы перед обновлением
+            python3 scripts/backup_db.py || true
+            docker compose up -d --build
+          '
+        else
+          echo "Dry-run deploy completed (no SERVER_HOST defined)."
+        fi

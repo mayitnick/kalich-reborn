@@ -4,16 +4,28 @@ import json
 import time
 import random
 import logging
+import threading
 from bs4 import BeautifulSoup
 import src.config as config
 from src.config import (
     GROUPS_CACHE_FILE,
     SYSTEM_FILTERS,
 )
-from src.database import extract_room
+from src.database import extract_room, get_db_connection, db_transaction
+
+_LAST_PARSER_REQUEST_TIME = 0.0
+_PARSER_LOCK = threading.Lock()
+_PARSER_MIN_INTERVAL = 0.2  # Минимальный интервал между запросами к Gloris (Phase 3.3)
 
 
 def requests_get_no_proxy(*args, **kwargs):
+    """Обёртка с ограничением частоты запросов (Rate Limiting) к сайту колледжа."""
+    global _LAST_PARSER_REQUEST_TIME
+    with _PARSER_LOCK:
+        elapsed = time.time() - _LAST_PARSER_REQUEST_TIME
+        if elapsed < _PARSER_MIN_INTERVAL:
+            time.sleep(_PARSER_MIN_INTERVAL - elapsed)
+        _LAST_PARSER_REQUEST_TIME = time.time()
     return config.requests_get_no_proxy(*args, **kwargs)
 
 
@@ -71,11 +83,38 @@ build_reverse_group_dict()
 
 def load_groups_cache():
     global GROUP_NAME_TO_ID
+    # Сначала пытаемся загрузить из SQLite (Phase 2.2)
+    try:
+        conn = get_db_connection()
+        cur = conn.execute("SELECT group_name, department, group_id FROM groups_cache")
+        rows = cur.fetchall()
+        conn.close()
+        if rows:
+            loaded = {}
+            for name, dep, gid in rows:
+                loaded[name] = [dep, gid]
+            GROUP_NAME_TO_ID = loaded
+            build_reverse_group_dict()
+            return
+    except Exception as e:
+        logger.debug(f"Could not load groups cache from SQLite: {e}")
+
+    # Fallback из JSON-файла и миграция в SQLite
     if os.path.exists(GROUPS_CACHE_FILE):
         try:
             with open(GROUPS_CACHE_FILE, 'r', encoding='utf-8') as f:
                 GROUP_NAME_TO_ID = json.load(f)
             build_reverse_group_dict()
+            if GROUP_NAME_TO_ID:
+                try:
+                    with db_transaction() as conn:
+                        for gname, info in GROUP_NAME_TO_ID.items():
+                            if isinstance(info, list) and len(info) >= 2:
+                                conn.execute("INSERT OR REPLACE INTO groups_cache (group_name, department, group_id) VALUES (?, ?, ?)", (gname, info[0], info[1]))
+                            elif isinstance(info, int):
+                                conn.execute("INSERT OR REPLACE INTO groups_cache (group_name, department, group_id) VALUES (?, ?, ?)", (gname, 3, info))
+                except Exception as e:
+                    logger.debug(f"Failed to migrate groups cache to DB: {e}")
         except Exception as e:
             logger.error(f"Error loading groups cache: {e}")
     if not GROUP_NAME_TO_ID:
@@ -113,6 +152,20 @@ def update_groups_cache():
     if updated or new_cache:
         GROUP_NAME_TO_ID = new_cache
         build_reverse_group_dict()
+
+        # Сохранение в SQLite (Phase 2.2)
+        try:
+            with db_transaction() as conn:
+                conn.execute("DELETE FROM groups_cache")
+                for gname, info in new_cache.items():
+                    if isinstance(info, list) and len(info) >= 2:
+                        conn.execute("INSERT OR REPLACE INTO groups_cache (group_name, department, group_id) VALUES (?, ?, ?)", (gname, info[0], info[1]))
+                    elif isinstance(info, int):
+                        conn.execute("INSERT OR REPLACE INTO groups_cache (group_name, department, group_id) VALUES (?, ?, ?)", (gname, 3, info))
+        except Exception as e:
+            logger.error(f"Failed to save groups cache to SQLite: {e}")
+
+        # Обратная совместимость с JSON
         try:
             os.makedirs(os.path.dirname(GROUPS_CACHE_FILE), exist_ok=True)
             with open(GROUPS_CACHE_FILE, 'w', encoding='utf-8') as f:

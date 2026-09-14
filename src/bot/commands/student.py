@@ -629,3 +629,186 @@ class FindByGroupCommand(BaseCommand):
             ctx.reply(
                 message, ctx.wrap_code(f"Нет данных для {target_group} на сегодня.")
             )
+
+
+class HomeworkCommand(BaseCommand):
+    """Карманный планер: дедлайны, домашка и заметки к парам (Phase 6.4)."""
+    name = "hw"
+    aliases = ["note", "домашка", "заметки", "дз"]
+    description = "Карманный планер: просмотр и добавление домашки/заметок (/hw предмет заметка)"
+    requires = ["db"]
+
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
+        text = message.text or ""
+        parts = text.split(maxsplit=2)
+        cmd = parts[0].lower() if parts else ""
+        args = parts[1:] if len(parts) > 1 else []
+
+        # 1. Если аргументы переданы -> Добавление заметки
+        if len(args) >= 2:
+            subject = args[0].strip()
+            note = args[1].strip()
+            mons = ctx.db.monitor_manager.get_user_monitors(message.chat.id)
+            gid = mons[0]['group_id'] if mons else 0
+            dep = mons[0]['department'] if mons else 3
+            ctx.db.add_homework_note(message.chat.id, gid, dep, subject, note)
+            return ctx.reply(
+                message,
+                f"📝 Заметка добавлена:\n📌 *{subject}*: {note}\n\nПосмотреть все: `/hw`",
+                parse_mode='Markdown'
+            )
+        elif len(args) == 1 and args[0].strip() in ("clear", "очистить", "удалить"):
+            # Очистка всех заметок
+            notes = ctx.db.get_homework_notes(message.chat.id)
+            for n in notes:
+                ctx.db.delete_homework_note(n['id'], message.chat.id)
+            return ctx.reply(message, "🗑 Все заметки удалены.")
+
+        # 2. Если без аргументов -> Вывод активных заметок
+        notes = ctx.db.get_homework_notes(message.chat.id)
+        if not notes:
+            return ctx.reply(
+                message,
+                "📭 У вас пока нет заметок и домашнего задания.\n\n"
+                "Чтобы добавить: `/hw [Предмет] [Текст заметки]`\n"
+                "Например: `/hw Математика сдать типовой расчёт`",
+                parse_mode='Markdown'
+            )
+
+        res = "📋 *Ваш карманный планер:*\n\n"
+        for i, n in enumerate(notes[:15], 1):
+            res += f"{i}. 📌 *{n['subject']}*: {n['note']}\n"
+        res += "\n_Очистить всё: `/hw clear`_"
+        ctx.reply(message, res, parse_mode='Markdown')
+
+
+class FreeRoomsCommand(BaseCommand):
+    """Навигатор по колледжу: свободные аудитории прямо сейчас (Phase 6.5)."""
+    name = "free"
+    aliases = ["свободные", "гдеприсесть", "аудитории", "окна"]
+    description = "Поиск свободных аудиторий в отделении прямо сейчас"
+    requires = ["db", "parser"]
+
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
+        mons = ctx.db.monitor_manager.get_user_monitors(message.chat.id)
+        user_department = mons[0]['department'] if mons else 3
+
+        day = now_msk().isoweekday()
+        if day > 6:
+            return ctx.reply(message, ctx.wrap_code("Сегодня выходной, колледж закрыт."))
+
+        now_time = now_msk().strftime("%H:%M")
+        from src.config import CALLS
+        max_lessons = 10 if day == 1 else 8
+
+        # Находим текущую или следующую пару
+        current_idx = None
+        for i, call in enumerate(CALLS[:max_lessons]):
+            if call[0] <= now_time <= call[1]:
+                current_idx = i
+                break
+        if current_idx is None:
+            # Если между парами или перед парами, берем ближайшую следующую
+            for i, call in enumerate(CALLS[:max_lessons]):
+                if now_time < call[0]:
+                    current_idx = i
+                    break
+        if current_idx is None:
+            return ctx.reply(message, ctx.wrap_code("Учебный день завершён, все кабинеты свободны."))
+
+        call_time = f"{CALLS[current_idx][0]} - {CALLS[current_idx][1]}"
+        all_data = ctx.db.get_all_schedules_for_day(day)
+
+        # Собираем все занятые и известные кабинеты отделения
+        occupied_rooms = set()
+        all_known_rooms = set()
+
+        for (dep, gid), lessons in all_data.items():
+            if dep != user_department:
+                continue
+            for idx, lesson in enumerate(lessons):
+                room = ctx.db.extract_room(str(lesson))
+                if room and room.isdigit():
+                    all_known_rooms.add(room)
+                    if idx == current_idx:
+                        occupied_rooms.add(room)
+
+        free_rooms = sorted(all_known_rooms - occupied_rooms, key=lambda x: int(x) if x.isdigit() else x)
+        if not free_rooms:
+            return ctx.reply(
+                message,
+                ctx.wrap_code(f"Отделение {user_department} | {current_idx+1} пара ({call_time})\nСвободных кабинетов не обнаружено.")
+            )
+
+        res = f"🏫 Свободные аудитории (Отд. {user_department})\n⏰ {current_idx+1} пара ({call_time}):\n\n"
+        res += ", ".join(free_rooms[:30])
+        ctx.reply(message, ctx.wrap_code(res))
+
+
+class RollcallCommand(BaseCommand):
+    """Инструменты старосты: интерактивная перекличка в групповом чате (Phase 7.2)."""
+    name = "rollcall"
+    aliases = ["перекличка", "посещаемость", "ктотут"]
+    description = "Запуск интерактивной переклички студентов в чате группы"
+    requires = ["db"]
+
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
+        from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("✋ Я на парах!", callback_data="rollcall_present"),
+            InlineKeyboardButton("🤒 Болею", callback_data="rollcall_ill")
+        )
+        ctx.reply(
+            message,
+            "📋 *Утренняя перекличка группы!*\n\n"
+            "Отметьтесь кнопкой ниже, чтобы староста видел посещаемость:\n"
+            "• ✋ Присутствуют: 0\n"
+            "• 🤒 Отсутствуют: 0\n\n"
+            "_(Нажмите кнопку ниже для отметки)_",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+
+
+class TermProgressCommand(BaseCommand):
+    """Студенческий трекер семестра, каникул и сессии (Phase 7.3)."""
+    name = "term"
+    aliases = ["семестр", "сессия", "каникулы", "progress"]
+    description = "Счетчик учебных недель и дней до конца семестра и сессии"
+    requires = ["config"]
+
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
+        now = now_msk()
+        year = now.year
+        # Осенний семестр: 1 сентября - 31 декабря, Весенний: 12 января - 30 июня
+        if now.month >= 9:
+            term_name = f"Осенний семестр {year}"
+            term_start = datetime(year, 9, 1)
+            term_end = datetime(year, 12, 31)
+            session_start = datetime(year, 12, 20)
+        else:
+            term_name = f"Весенний семестр {year}"
+            term_start = datetime(year, 1, 12)
+            term_end = datetime(year, 6, 30)
+            session_start = datetime(year, 6, 10)
+
+        total_days = (term_end - term_start).days
+        passed_days = max(0, (now.date() - term_start.date()).days)
+        remaining_days = max(0, (term_end.date() - now.date()).days)
+        current_week = (passed_days // 7) + 1
+        days_to_session = max(0, (session_start.date() - now.date()).days)
+
+        percent = min(100, int((passed_days / total_days) * 100)) if total_days > 0 else 0
+        filled_bars = percent // 10
+        progress_bar = "▓" * filled_bars + "░" * (10 - filled_bars)
+
+        res = (
+            f"🎓 *Трекер семестра: {term_name}*\n\n"
+            f"Прогресс: `[{progress_bar}]` {percent}%\n\n"
+            f"• 📅 Текущая учебная неделя: *{current_week}*\n"
+            f"• ⏳ До начала сессии: *{days_to_session} дн.*\n"
+            f"• 🏖 До каникул: *{remaining_days} дн.*\n\n"
+            f"Держитесь, Калич верит в вас! [^ v ^]"
+        )
+        ctx.reply(message, res, parse_mode='Markdown')

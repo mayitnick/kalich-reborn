@@ -4,6 +4,7 @@ import sqlite3
 import hashlib
 import time
 import hmac
+import logging
 import threading
 from urllib.parse import parse_qsl
 from datetime import datetime, timedelta
@@ -11,6 +12,8 @@ import asyncio
 from aiohttp import web
 import kalich
 from src.config import now_msk
+
+logger = logging.getLogger(__name__)
 
 # Telegram verification helper
 def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -30,8 +33,89 @@ def verify_telegram_init_data(init_data: str, bot_token: str) -> dict | None:
             return json.loads(parsed.get('user', '{}'))
         return None
     except Exception as e:
-        print(f"[API] InitData check failed: {e}")
+        logger.warning(f"InitData check failed: {e}")
         return None
+
+
+def extract_user_id(request: web.Request, data: dict = None) -> int | None:
+    """Извлекает и верифицирует chat_id через Telegram initData с поддержкой dev/test fallback."""
+    init_data = ""
+    if data and isinstance(data, dict):
+        init_data = data.get('initData') or ""
+    if not init_data:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer ") or auth_header.startswith("tma "):
+            init_data = auth_header.split(" ", 1)[1].strip()
+
+    if init_data:
+        user_info = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
+        if user_info and 'id' in user_info:
+            return int(user_info['id'])
+
+    # Для тестов и локальной разработки разрешаем fallback
+    is_test_or_dev = (
+        os.getenv('TESTING') == '1'
+        or request.app.get('testing', False)
+        or os.getenv('ENV') == 'development'
+        or not kalich.BOT_TOKEN
+        or kalich.BOT_TOKEN.startswith('123456:dummy')
+    )
+    if is_test_or_dev:
+        if data and isinstance(data, dict) and data.get('device_id'):
+            try:
+                return int(data['device_id'])
+            except (ValueError, TypeError):
+                pass
+        return 1234567
+
+    return None
+
+
+def validate_override_payload(data: dict) -> tuple[bool, str]:
+    """Строгая валидация полей для создания/изменения замены (Phase 3.1)."""
+    if not isinstance(data, dict):
+        return False, "Payload must be a JSON object"
+    try:
+        dept = int(data.get('department', 0))
+        day = int(data.get('day', 0))
+        slot_idx = int(data.get('slot_idx', -1))
+        group_id = int(data.get('group_id', 0))
+    except (ValueError, TypeError):
+        return False, "Fields 'department', 'day', 'slot_idx', and 'group_id' must be integers"
+
+    if dept not in (1, 2, 3):
+        return False, f"Invalid department: {dept}. Expected 1, 2, or 3"
+    if not (1 <= day <= 7):
+        return False, f"Invalid day: {day}. Expected 1..7"
+    if not (0 <= slot_idx <= 10):
+        return False, f"Invalid slot_idx: {slot_idx}. Expected 0..10"
+    if group_id <= 0:
+        return False, f"Invalid group_id: {group_id}. Must be positive"
+    return True, ""
+
+
+# In-memory Rate Limiting (Phase 3.3)
+_RATE_LIMIT_STORE: dict[str, list[float]] = {}
+_RATE_LIMIT_WINDOW = 60.0  # seconds
+_RATE_LIMIT_MAX_REQUESTS = 180  # per IP per window
+
+@web.middleware
+async def rate_limit_middleware(request: web.Request, handler):
+    ip = request.remote or "127.0.0.1"
+    # Skip rate limiting for local loopback in testing
+    is_test = os.getenv('TESTING') == '1' or request.app.get('testing', False)
+    if ip in ("127.0.0.1", "::1", "localhost") and is_test:
+        return await handler(request)
+
+    now = time.time()
+    history = _RATE_LIMIT_STORE.get(ip, [])
+    history = [t for t in history if now - t < _RATE_LIMIT_WINDOW]
+    if len(history) >= _RATE_LIMIT_MAX_REQUESTS:
+        return web.json_response({'error': 'Rate limit exceeded. Try again later.'}, status=429)
+    history.append(now)
+    _RATE_LIMIT_STORE[ip] = history
+    return await handler(request)
+
 
 def get_db():
     conn = sqlite3.connect(kalich.DB_FILE)
@@ -272,11 +356,16 @@ async def handle_teacher_schedule(request):
 async def handle_override(request):
     try:
         data = await request.json()
-        device_id = data.get('device_id')
-        chat_id = int(device_id) if device_id else 1234567
+        valid, err_msg = validate_override_payload(data)
+        if not valid:
+            return web.json_response({'error': f'Validation error: {err_msg}'}, status=400)
+
+        chat_id = extract_user_id(request, data)
+        if not chat_id:
+            return web.json_response({'error': 'Unauthorized: initData is required'}, status=401)
         
         if chat_id != 1234567 and not kalich.is_teacher(chat_id) and chat_id not in kalich.MODERATOR_IDS:
-            return web.json_response({'error': 'Unauthorized'}, status=401)
+            return web.json_response({'error': 'Forbidden'}, status=403)
             
         dept = int(data.get('department'))
         day = int(data.get('day'))
@@ -307,23 +396,27 @@ async def handle_override(request):
         await asyncio.to_thread(sync_override_worker)
         return web.json_response({'status': 'success'})
     except Exception as e:
+        logger.exception("Error in handle_override")
         return web.json_response({'error': str(e)}, status=500)
 
 # Offline sync bulk overrides
 async def handle_sync(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
         overrides = data.get('overrides', [])
         
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        chat_id = user_data.get('id') if user_data else 1234567
+        chat_id = extract_user_id(request, data)
+        if not chat_id:
+            return web.json_response({'error': 'Unauthorized: initData is required'}, status=401)
         
         if chat_id != 1234567 and not kalich.is_teacher(chat_id) and chat_id not in kalich.MODERATOR_IDS:
-            return web.json_response({'error': 'Unauthorized'}, status=401)
+            return web.json_response({'error': 'Forbidden'}, status=403)
             
         def sync_overrides_batch():
             for o in overrides:
+                valid, err_msg = validate_override_payload(o)
+                if not valid:
+                    continue
                 dept = int(o.get('department'))
                 day = int(o.get('day'))
                 slot_idx = int(o.get('slot_idx'))
@@ -352,17 +445,18 @@ async def handle_sync(request):
         await asyncio.to_thread(sync_overrides_batch)
         return web.json_response({'status': 'success', 'synced': len(overrides)})
     except Exception as e:
+        logger.exception("Error in handle_sync")
         return web.json_response({'error': str(e)}, status=500)
 
 # Settings Update
 async def handle_settings(request):
     try:
         data = await request.json()
-        init_data = data.get('initData', '')
         settings = data.get('settings', {})
         
-        user_data = verify_telegram_init_data(init_data, kalich.BOT_TOKEN)
-        chat_id = user_data.get('id') if user_data else 1234567
+        chat_id = extract_user_id(request, data)
+        if not chat_id:
+            return web.json_response({'error': 'Unauthorized: initData is required'}, status=401)
         
         def sync_settings_worker():
             for k, v in settings.items():
@@ -371,7 +465,7 @@ async def handle_settings(request):
         await asyncio.to_thread(sync_settings_worker)
         return web.json_response({'status': 'success'})
     except Exception as e:
-        return web.json_response({'error': str(e)}, status=500)
+        logger.exception("Error in handle_settings")
         return web.json_response({'error': str(e)}, status=500)
 
 # Analytics Data
@@ -481,6 +575,69 @@ async def handle_analytics(request):
         return web.json_response(response_data)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
+
+# =================== iCal / .ics Live Feed (Phase 6.3) ===================
+
+async def handle_calendar_feed(request):
+    """Генерирует живой календарный фид (.ics) для Google Calendar, Apple Calendar, Outlook."""
+    dept = int(request.match_info.get('department', request.query.get('department', 3)))
+    gid_param = request.match_info.get('group_id', request.query.get('group_id', 0))
+    try:
+        group_id = int(gid_param)
+    except (ValueError, TypeError):
+        return web.Response(text="Invalid group_id", status=400)
+
+    gname = kalich.GROUP_ID_TO_NAME.get(dept, {}).get(group_id, f"Group {group_id}")
+    now = now_msk()
+    monday = now - timedelta(days=now.weekday())
+
+    from src.config import CALLS
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Kalich Bot//Calendar Live Feed//RU",
+        f"X-WR-CALNAME:Расписание {gname}",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH"
+    ]
+
+    all_data = {d: kalich.get_all_schedules_for_day(d) for d in range(1, 7)}
+    for day in range(1, 7):
+        date_for_day = monday + timedelta(days=day - 1)
+        date_str = date_for_day.strftime("%Y%m%d")
+        lessons = all_data.get(day, {}).get((dept, group_id), [])
+        for idx, lesson in enumerate(lessons):
+            l_str = str(lesson).strip()
+            if not l_str or l_str.lower() in ("—", ".", "обед"):
+                continue
+            room = kalich.extract_room(l_str) or ""
+            subj = kalich.re.sub(r'\s*\(.*$', '', l_str).strip()
+            if idx < len(CALLS):
+                start_h, start_m = CALLS[idx][0].split(":")
+                end_h, end_m = CALLS[idx][1].split(":")
+            else:
+                start_h, start_m, end_h, end_m = "08", "30", "10", "00"
+
+            dt_start = f"{date_str}T{start_h}{start_m}00"
+            dt_end = f"{date_str}T{end_h}{end_m}00"
+            uid = f"kalich-{dept}-{group_id}-{date_str}-{idx}@kalich.bot"
+
+            lines.extend([
+                "BEGIN:VEVENT",
+                f"UID:{uid}",
+                f"DTSTAMP:{now.strftime('%Y%m%dT%H%M%SZ')}",
+                f"DTSTART:{dt_start}",
+                f"DTEND:{dt_end}",
+                f"SUMMARY:{subj}",
+                f"LOCATION:Кабинет {room}" if room else "LOCATION:Колледж",
+                f"DESCRIPTION:{idx+1} пара ({gname})",
+                "STATUS:CONFIRMED",
+                "END:VEVENT"
+            ])
+
+    lines.append("END:VCALENDAR")
+    ics_text = "\r\n".join(lines)
+    return web.Response(text=ics_text, content_type="text/calendar", charset="utf-8")
 
 # =================== MODERATOR DATA CONTROL ENDPOINTS ===================
 
@@ -635,9 +792,9 @@ async def handle_admin_fill(request):
         return web.json_response({'error': str(e)}, status=500)
 
 
-# Static file serving handlers (supports active or archived PWA)
+# Static file serving handlers (supports active miniapp or archived PWA)
 def _find_pwa_file(filename):
-    for base in ['pwa', 'archive/pwa']:
+    for base in ['miniapp', 'pwa', 'archive/pwa']:
         p = os.path.join(base, filename)
         if os.path.exists(p):
             return p
@@ -692,7 +849,7 @@ def start_server():
     kalich.init_db()
     ensure_dev_teacher()
     
-    app = web.Application()
+    app = web.Application(middlewares=[rate_limit_middleware])
     
     # API endpoints
     app.router.add_get('/api/health', handle_health)
@@ -705,6 +862,8 @@ def start_server():
     app.router.add_post('/api/sync', handle_sync)
     app.router.add_post('/api/settings', handle_settings)
     app.router.add_get('/api/analytics', handle_analytics)
+    app.router.add_get('/api/calendar/{department}/{group_id}.ics', handle_calendar_feed)
+    app.router.add_get('/api/calendar.ics', handle_calendar_feed)
     
     # Admin Panel endpoints
     app.router.add_get('/api/admin/overrides', handle_admin_overrides)
