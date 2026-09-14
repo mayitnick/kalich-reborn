@@ -792,9 +792,9 @@ async def handle_admin_fill(request):
         return web.json_response({'error': str(e)}, status=500)
 
 
-# Static file serving handlers (supports active or archived PWA)
+# Static file serving handlers (supports active webapp, pwa, or archived PWA)
 def _find_pwa_file(filename):
-    for base in ['pwa', 'archive/pwa']:
+    for base in ['webapp', 'pwa', 'archive/pwa']:
         p = os.path.join(base, filename)
         if os.path.exists(p):
             return p
@@ -880,7 +880,7 @@ def start_server():
     app.router.add_get('/sw.js', serve_sw)
     
     # Static directory for icons (if present)
-    for icon_dir in ['pwa/icons', 'archive/pwa/icons']:
+    for icon_dir in ['webapp/icons', 'pwa/icons', 'archive/pwa/icons']:
         if os.path.isdir(icon_dir):
             app.router.add_static('/icons', icon_dir)
             break

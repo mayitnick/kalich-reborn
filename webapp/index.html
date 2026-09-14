@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Калич Помощник</title>
+  
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-user">
+        <div class="user-avatar" id="user-avatar">КП</div>
+        <div class="user-details">
+          <span class="user-name" id="user-name">Загрузка...</span>
+          <span class="user-group-badge" id="user-group-badge">Группа не выбрана</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-group-selector-toggle" title="Выбрать группу" aria-label="Выбрать группу">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="btn-refresh" title="Обновить расписание" aria-label="Обновить">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Group Selector Dropdown / Modal Card -->
+    <div id="group-selector-card" class="filter-card group-card-collapsible hidden">
+      <div class="selector-row">
+        <div class="select-wrapper">
+          <label for="select-dept">Отделение</label>
+          <select id="select-dept">
+            <option value="1">1 отделение</option>
+            <option value="2">2 отделение</option>
+            <option value="3" selected>3 отделение</option>
+          </select>
+        </div>
+        <div class="select-wrapper flex-grow">
+          <label for="select-group">Группа</label>
+          <select id="select-group">
+            <option value="">Загрузка групп...</option>
+          </select>
+        </div>
+      </div>
+      <div class="save-default-row">
+        <button id="btn-save-default" class="btn-text">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+          Сделать группой по умолчанию
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="app-content">
+      
+      <!-- TAB 1: MAIN SCHEDULE (СЕГОДНЯ + ЗАВТРА) -->
+      <section id="tab-schedule" class="tab-view active">
+        <!-- Live Bells Countdown Card -->
+        <div id="bells-live-indicator" class="live-indicator-banner">
+          <div class="live-dot pulse"></div>
+          <div class="live-text" id="live-bells-text">Определение текущей пары...</div>
+        </div>
+
+        <!-- SECTION 1: СЕГОДНЯ -->
+        <div class="section-container">
+          <div class="section-header">
+            <div class="section-title-wrap">
+              <h2 class="section-title">Сегодня</h2>
+              <span class="section-date-badge" id="today-date-badge">-</span>
+            </div>
+            <span id="today-source-badge" class="badge badge-success">Актуально</span>
+          </div>
+
+          <div id="today-schedule-list" class="schedule-list">
+            <div class="loading-state">
+              <div class="spinner"></div>
+              <p>Загрузка расписания на сегодня...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- SECTION 2: ЗАВТРА -->
+        <div class="section-container mt-4">
+          <div class="section-header">
+            <div class="section-title-wrap">
+              <h2 class="section-title" id="tomorrow-title">Завтра</h2>
+              <span class="section-date-badge" id="tomorrow-date-badge">-</span>
+            </div>
+            <span id="tomorrow-source-badge" class="badge badge-success">Актуально</span>
+          </div>
+
+          <div id="tomorrow-schedule-list" class="schedule-list">
+            <div class="loading-state">
+              <div class="spinner"></div>
+              <p>Загрузка расписания на завтра...</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- SECTION 3: ВСЯ НЕДЕЛЯ (Опциональный просмотр любого дня) -->
+        <div class="section-container mt-4 week-section">
+          <div class="section-header">
+            <div class="section-title-wrap">
+              <h3 class="section-subtitle">Вся неделя</h3>
+            </div>
+          </div>
+
+          <!-- Day Pills -->
+          <div class="days-pills" id="days-pills">
+            <button class="day-pill" data-day="1">Пн</button>
+            <button class="day-pill" data-day="2">Вт</button>
+            <button class="day-pill" data-day="3">Ср</button>
+            <button class="day-pill" data-day="4">Чт</button>
+            <button class="day-pill" data-day="5">Пт</button>
+            <button class="day-pill" data-day="6">Сб</button>
+          </div>
+
+          <div id="custom-day-schedule-list" class="schedule-list mt-2 hidden">
+            <!-- Rendered when a specific day pill is tapped -->
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: TEACHERS & ROOMS -->
+      <section id="tab-teachers" class="tab-view">
+        <div class="filter-card">
+          <div class="search-box">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input type="text" id="teacher-search-input" placeholder="Поиск по преподавателю или кабинету..." autocomplete="off">
+          </div>
+
+          <div class="selector-row mt-2">
+            <div class="select-wrapper">
+              <label for="teacher-select-dept">Отделение</label>
+              <select id="teacher-select-dept">
+                <option value="1">1 отделение</option>
+                <option value="2">2 отделение</option>
+                <option value="3" selected>3 отделение</option>
+              </select>
+            </div>
+            <div class="select-wrapper flex-grow">
+              <label for="teacher-select-day">День</label>
+              <select id="teacher-select-day">
+                <option value="1">Понедельник</option>
+                <option value="2">Вторник</option>
+                <option value="3">Среда</option>
+                <option value="4">Четверг</option>
+                <option value="5">Пятница</option>
+                <option value="6">Суббота</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Quick Room Chips -->
+          <div class="chips-row" id="room-chips">
+            <span class="chip" data-room="101">Каб. 101</span>
+            <span class="chip" data-room="202">Каб. 202</span>
+            <span class="chip" data-room="302">Каб. 302</span>
+            <span class="chip" data-room="303">Каб. 303</span>
+            <span class="chip" data-room="304">Каб. 304</span>
+            <span class="chip" data-room="305">Каб. 305</span>
+          </div>
+        </div>
+
+        <div id="teacher-schedule-list" class="schedule-list">
+          <div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <p>Введите номер кабинета или фамилию преподавателя</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: BELLS & CALENDAR SYNC -->
+      <section id="tab-bells" class="tab-view">
+        <div class="bells-card">
+          <div class="bells-header">
+            <h3>Расписание звонков</h3>
+            <span class="bells-sub">Пары по 1 ч 30 мин</span>
+          </div>
+
+          <div class="bells-list" id="bells-list">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
+
+        <div class="calendar-card">
+          <div class="calendar-card-header">
+            <div class="calendar-icon">📅</div>
+            <div>
+              <h3>Синхронизация с календарем</h3>
+              <p>Добавьте расписание в Apple / Google Calendar</p>
+            </div>
+          </div>
+          <div class="calendar-actions">
+            <button id="btn-copy-ics" class="btn btn-secondary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              Скопировать ссылку .ics
+            </button>
+            <button id="btn-download-ics" class="btn btn-primary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Скачать файл .ics
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: PROFILE & SETTINGS -->
+      <section id="tab-settings" class="tab-view">
+        <div class="settings-card">
+          <h3>Мой профиль</h3>
+          <div class="settings-item">
+            <span>Имя в Telegram</span>
+            <strong id="settings-user-name">-</strong>
+          </div>
+          <div class="settings-item">
+            <span>ID пользователя</span>
+            <code id="settings-user-id">-</code>
+          </div>
+          <div class="settings-item">
+            <span>Сохраненная группа</span>
+            <strong id="settings-saved-group">Не выбрана</strong>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <h3>Оформление</h3>
+          <div class="theme-switch-row">
+            <span>Тема оформления</span>
+            <div class="theme-buttons">
+              <button class="theme-btn active" data-theme="tg">Telegram</button>
+              <button class="theme-btn" data-theme="dark">Тёмная</button>
+              <button class="theme-btn" data-theme="light">Светлая</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <h3>О приложении</h3>
+          <p class="about-text">
+            <strong>Калич Помощник TMA</strong> — официальное мини-приложение для просмотра расписания пар, замен и аудиторий.
+          </p>
+          <div class="settings-item">
+            <span>Версия</span>
+            <span>2.1.0</span>
+          </div>
+          <div class="settings-item">
+            <span>Статус сервера</span>
+            <span id="server-health-badge" class="badge badge-success">В сети</span>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" data-tab="tab-schedule">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        <span>Сегодня & Завтра</span>
+      </button>
+      <button class="nav-item" data-tab="tab-teachers">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span>Кабинеты</span>
+      </button>
+      <button class="nav-item" data-tab="tab-bells">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <span>Звонки</span>
+      </button>
+      <button class="nav-item" data-tab="tab-settings">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>Профиль</span>
+      </button>
+    </nav>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

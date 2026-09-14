@@ -1,9 +1,13 @@
 import telebot
 
 
-def get_start_roles_markup():
+def get_start_roles_markup(webapp_url: str = None):
     """Клавиатура выбора роли/отделения при /start."""
     markup = telebot.types.InlineKeyboardMarkup()
+    if webapp_url:
+        markup.add(
+            telebot.types.InlineKeyboardButton("📱 Открыть мини-приложение", web_app=telebot.types.WebAppInfo(url=webapp_url))
+        )
     markup.add(
         telebot.types.InlineKeyboardButton("1️⃣ Первое отделение", callback_data="start_role_1"),
         telebot.types.InlineKeyboardButton("2️⃣ Второе отделение", callback_data="start_role_2")

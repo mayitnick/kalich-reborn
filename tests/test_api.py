@@ -57,6 +57,11 @@ def api_url(memory_db):
     app.router.add_get('/api/calendar/{department}/{group_id}.ics', api_server.handle_calendar_feed)
     app.router.add_post('/api/admin/fill', api_server.handle_admin_fill)
     app.router.add_post('/api/admin/flush', api_server.handle_admin_flush)
+    app.router.add_get('/', api_server.serve_index)
+    app.router.add_get('/index.html', api_server.serve_index)
+    app.router.add_get('/styles.css', api_server.serve_styles)
+    app.router.add_get('/app.js', api_server.serve_app_js)
+    app.router.add_get('/manifest.json', api_server.serve_manifest)
     
     port, loop, runner = run_server_in_thread(app)
     
@@ -323,6 +328,22 @@ def test_api_calendar_ics(api_url):
     assert "SUMMARY:Математика" in resp.text
     assert "LOCATION:Кабинет 302" in resp.text
     assert "END:VCALENDAR" in resp.text
+
+
+def test_api_serves_webapp_tma(api_url):
+    """Тестирование отдачи статических файлов Telegram Mini App."""
+    resp_index = requests.get(f"{api_url}/")
+    assert resp_index.status_code == 200
+    assert "telegram-web-app.js" in resp_index.text
+
+    resp_styles = requests.get(f"{api_url}/styles.css")
+    assert resp_styles.status_code == 200
+    assert "--tg-theme-bg-color" in resp_styles.text
+
+    resp_app = requests.get(f"{api_url}/app.js")
+    assert resp_app.status_code == 200
+    assert "Telegram" in resp_app.text
+    assert "PAIR_TIMES" in resp_app.text
 
 
 

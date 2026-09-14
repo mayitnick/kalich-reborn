@@ -2,7 +2,8 @@
 Общие команды бота для всех пользователей.
 """
 from datetime import datetime
-from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+import telebot
+from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 import messages
 import src.config
 from src.config import now_msk
@@ -216,6 +217,22 @@ class PhotoEchoHandler(BaseCommand):
         )
 
 
+class WebappCommand(BaseCommand):
+    """Открыть Telegram Mini App с расписанием."""
+    name = "webapp"
+    aliases = ["app", "мини_приложение", "расписание_апп"]
+    description = "Открыть интерактивное мини-приложение расписания"
+    requires = ["config"]
+
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
+        url = getattr(src.config, 'WEBAPP_URL', '') or "https://kalich.example.com"
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("📱 Открыть расписание", web_app=telebot.types.WebAppInfo(url=url))
+        )
+        ctx.reply(message, "Нажмите кнопку ниже, чтобы открыть мини-приложение:", reply_markup=markup)
+
+
 class CallStatusPatternHandler(BaseCommand):
     """Текстовый триггер проверки времени звонка."""
     name = "call_status_trigger"
@@ -242,5 +259,6 @@ __all__ = [
     "SettingsCommand",
     "PhotoEchoHandler",
     "CallStatusPatternHandler",
+    "WebappCommand",
 ]
 

@@ -60,6 +60,10 @@ venv.bak/
 # Local databases and JSON caches
 data/
 schedules.db
+*.sql
+*.sqlite
+*.sqlite3
+*.db
 active_monitors.json
 groups_cache.json
 
