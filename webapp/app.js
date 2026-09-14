@@ -211,7 +211,18 @@ async function loadGroups() {
   try {
     const res = await apiFetch("/api/groups");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    state.groups = await res.json();
+    const data = await res.json();
+    const rawGroups = data.groups || data;
+    const list = [];
+    for (const [name, info] of Object.entries(rawGroups)) {
+      if (Array.isArray(info)) {
+        list.push({ department: Number(info[0]), group_id: Number(info[1]), group_name: name });
+      } else if (info && typeof info === 'object') {
+        list.push({ department: Number(info.department), group_id: Number(info.group_id), group_name: info.group_name || name });
+      }
+    }
+    list.sort((a, b) => a.group_name.localeCompare(b.group_name, 'ru'));
+    state.groups = list;
     populateGroupSelect();
   } catch (err) {
     console.error("Failed to load groups:", err);
