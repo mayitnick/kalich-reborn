@@ -352,33 +352,70 @@ async def handle_schedule(request):
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
-# Get Teachers List from DB (db.sqlite3 / schedules.db)
+# Get Teachers List from DB (supports Gloris db.sqlite3 persons_teacher and native teachers table)
 async def handle_teachers_list(request):
     try:
         def sync_teachers_worker():
             conn = get_db()
-            cur = conn.execute("SELECT name, department, rooms, chat_id FROM teachers WHERE status='approved' OR status='pending' OR status IS NULL")
-            rows = cur.fetchall()
-            conn.close()
+            cur = conn.cursor()
             teachers = []
-            for r in rows:
-                name = r[0] or ""
-                dept = r[1] or 3
-                raw_rooms = r[2] or ""
-                rooms = []
-                if raw_rooms:
-                    try:
-                        parsed = json.loads(raw_rooms)
-                        if isinstance(parsed, list):
-                            rooms = [str(x).strip() for x in parsed if str(x).strip()]
-                    except Exception:
-                        rooms = [x.strip() for x in raw_rooms.split(',') if x.strip()]
-                teachers.append({
-                    'name': name,
-                    'department': dept,
-                    'rooms': rooms,
-                    'chat_id': r[3]
-                })
+
+            # 1. Check if Gloris persons_teacher table exists
+            has_gloris_teachers = cur.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='persons_teacher'"
+            ).fetchone()[0] > 0
+
+            if has_gloris_teachers:
+                q = """
+                SELECT pt.id, pt.last_name, pt.first_name, pt.patro_name, dc.title, pt.chat_id, pt.sub_college_id
+                FROM persons_teacher pt
+                LEFT JOIN docs_cabinet dc ON pt.cabinet_id = dc.id
+                WHERE pt.last_name IS NOT NULL AND pt.last_name != '-' AND pt.last_name != ''
+                ORDER BY pt.last_name
+                """
+                for r in cur.execute(q).fetchall():
+                    full_name = f"{r[1]} {r[2]} {r[3]}".replace(' -', '').strip()
+                    room = str(r[4] or "").strip()
+                    rooms = [room] if room and room != '0' else []
+                    dept = r[6] if r[6] in (1, 2, 3) else 3
+                    teachers.append({
+                        'name': full_name,
+                        'short_name': f"{r[1]} {r[2][:1] + '.' if r[2] else ''}{r[3][:1] + '.' if r[3] else ''}".strip(),
+                        'department': dept,
+                        'rooms': rooms,
+                        'chat_id': r[5]
+                    })
+
+            # 2. Also check native teachers table
+            has_native_teachers = cur.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='teachers'"
+            ).fetchone()[0] > 0
+
+            if has_native_teachers:
+                cur2 = conn.execute("SELECT name, department, rooms, chat_id FROM teachers WHERE status='approved' OR status='pending' OR status IS NULL")
+                for r in cur2.fetchall():
+                    name = r[0] or ""
+                    if not name or any(t['name'] == name for t in teachers):
+                        continue
+                    dept = r[1] or 3
+                    raw_rooms = r[2] or ""
+                    rooms = []
+                    if raw_rooms:
+                        try:
+                            parsed = json.loads(raw_rooms)
+                            if isinstance(parsed, list):
+                                rooms = [str(x).strip() for x in parsed if str(x).strip()]
+                        except Exception:
+                            rooms = [x.strip() for x in raw_rooms.split(',') if x.strip()]
+                    teachers.append({
+                        'name': name,
+                        'short_name': name,
+                        'department': dept,
+                        'rooms': rooms,
+                        'chat_id': r[3]
+                    })
+
+            conn.close()
             # Sort by name
             teachers.sort(key=lambda t: t['name'])
             return teachers
@@ -388,6 +425,16 @@ async def handle_teachers_list(request):
     except Exception as e:
         return web.json_response({'error': str(e), 'teachers': []}, status=500)
 
+
+# Weekday table mapping for Gloris db.sqlite3
+GLORIS_WEEKDAY_TABLES = {
+    1: 'lesson_table_mod_monday',
+    2: 'lesson_table_mod_tuesday',
+    3: 'lesson_table_mod_wednesday',
+    4: 'lesson_table_mod_thursday',
+    5: 'lesson_table_mod_friday',
+    6: 'lesson_table_mod_saturday'
+}
 
 # Get Teacher or Room Schedule (Public search by room / teacher_name or authorized by chat_id)
 async def handle_teacher_schedule(request):
@@ -403,35 +450,76 @@ async def handle_teacher_schedule(request):
         # 1. Public Search by Room or Teacher Name
         if room_query or teacher_query:
             def sync_search_worker():
+                results = []
+                conn = get_db()
+                cur = conn.cursor()
+
+                # Clean search room
+                clean_room = room_query.replace('каб.', '').replace('каб', '').replace('Каб.', '').replace('Каб', '').strip().lower()
+
+                # Step A: Check if Gloris relational tables exist
+                day_table = GLORIS_WEEKDAY_TABLES.get(day)
+                has_gloris_schedule = False
+                if day_table:
+                    has_gloris_schedule = cur.execute(
+                        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+                        (day_table,)
+                    ).fetchone()[0] > 0
+
+                if has_gloris_schedule:
+                    # Also find teacher cabinet if searching by teacher name
+                    # or find teachers assigned to this cabinet if searching by room
+                    q_gloris = f"""
+                    SELECT l.less, g.title, ep.title, 
+                           pt.last_name || ' ' || pt.first_name || ' ' || pt.patro_name,
+                           dc.title, pt_cab.title
+                    FROM {day_table} l
+                    JOIN persons_group g ON l.group_id = g.id
+                    LEFT JOIN education_plans_dataep ep ON l.dis_id = ep.id
+                    LEFT JOIN persons_teacher pt ON l.person_id = pt.id
+                    LEFT JOIN docs_cabinet dc ON l.cabinet_id = dc.id
+                    LEFT JOIN docs_cabinet pt_cab ON pt.cabinet_id = pt_cab.id
+                    """
+                    for row in cur.execute(q_gloris).fetchall():
+                        less_str = str(row[0] or 1)
+                        try:
+                            # slot_idx: less 1 -> 0, less 2 -> 1, etc.
+                            slot_idx = int(less_str) - 1
+                        except ValueError:
+                            slot_idx = 0
+
+                        group_title = row[1] or ""
+                        subj_title = row[2] or ""
+                        teacher_name = (row[3] or "").strip()
+                        lesson_room = str(row[4] or "").strip()
+                        assigned_room = str(row[5] or "").strip()
+
+                        effective_room = lesson_room if lesson_room and lesson_room != '0' else assigned_room
+                        eff_clean = effective_room.lower()
+
+                        matches_room = bool(clean_room and (clean_room == eff_clean or clean_room == lesson_room.lower() or clean_room == assigned_room.lower()))
+                        matches_teacher = bool(teacher_query and (
+                            teacher_query.lower() in teacher_name.lower() or
+                            teacher_query.lower() in subj_title.lower()
+                        ))
+
+                        if matches_room or matches_teacher:
+                            results.append({
+                                'slot_idx': slot_idx,
+                                'subject': subj_title,
+                                'room': effective_room or clean_room,
+                                'group_name': group_title,
+                                'teacher': teacher_name,
+                                'department': dept,
+                                'is_override': False
+                            })
+
+                conn.close()
+
+                # Step B: Also search parsed schedules (all_data)
                 all_data = kalich.get_all_schedules_for_day(day)
                 all_data = kalich.apply_teacher_overrides(all_data, day, date_str)
 
-                # If teacher query provided, resolve their rooms from DB if needed
-                target_rooms = set()
-                matched_teacher_name = ""
-                if room_query:
-                    clean_room = room_query.replace('каб.', '').replace('каб', '').strip()
-                    target_rooms.add(clean_room.lower())
-
-                if teacher_query:
-                    conn = get_db()
-                    t_rows = conn.execute(
-                        "SELECT name, department, rooms FROM teachers WHERE name LIKE ?",
-                        (f"%{teacher_query}%",)
-                    ).fetchall()
-                    conn.close()
-                    for t in t_rows:
-                        matched_teacher_name = t[0]
-                        raw_r = t[2] or ""
-                        try:
-                            for r in json.loads(raw_r):
-                                target_rooms.add(str(r).strip().lower())
-                        except Exception:
-                            for r in raw_r.split(','):
-                                if r.strip():
-                                    target_rooms.add(r.strip().lower())
-
-                results = []
                 max_slots = 10 if day == 1 else 8
                 from src.services.parser import GROUP_ID_TO_NAME
 
@@ -463,27 +551,26 @@ async def handle_teacher_schedule(request):
                             match = re.match(r'^(.*?)(?:\s*\(.*?\))?$', l_str)
                             subj = match.group(1).strip() if match else l_str
 
-                        # Check if lesson matches room or teacher
                         room_clean = room.lower().strip()
-                        matches_room = bool(target_rooms and any(tr == room_clean or tr in room_clean for tr in target_rooms))
+                        matches_room = bool(clean_room and (clean_room == room_clean or clean_room in room_clean))
                         matches_teacher = bool(teacher_query and (
-                            (matched_teacher_name and matched_teacher_name.lower() in teacher.lower())
-                            or (teacher_query.lower() in teacher.lower())
-                            or (teacher_query.lower() in subj.lower())
+                            teacher_query.lower() in (teacher or '').lower() or
+                            teacher_query.lower() in subj.lower()
                         ))
 
                         if matches_room or matches_teacher:
-                            results.append({
-                                'slot_idx': idx,
-                                'subject': subj,
-                                'room': room,
-                                'group_name': group_name,
-                                'teacher': teacher or matched_teacher_name,
-                                'department': dep,
-                                'is_override': is_override
-                            })
+                            # Avoid duplicates from step A
+                            if not any(r['slot_idx'] == idx and r['group_name'] == group_name for r in results):
+                                results.append({
+                                    'slot_idx': idx,
+                                    'subject': subj,
+                                    'room': room or clean_room,
+                                    'group_name': group_name,
+                                    'teacher': teacher,
+                                    'department': dep,
+                                    'is_override': is_override
+                                })
 
-                # Sort by slot_idx, group_name
                 results.sort(key=lambda x: (x['slot_idx'], x['group_name']))
                 return results
 
@@ -502,6 +589,8 @@ async def handle_teacher_schedule(request):
 
         schedule = await asyncio.to_thread(sync_teacher_schedule_worker)
         return web.json_response(schedule)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
