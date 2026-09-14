@@ -94,6 +94,26 @@ def validate_override_payload(data: dict) -> tuple[bool, str]:
     return True, ""
 
 
+# CORS Middleware
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        return web.Response(
+            status=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Max-Age": "86400"
+            }
+        )
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    return response
+
+
 # In-memory Rate Limiting (Phase 3.3)
 _RATE_LIMIT_STORE: dict[str, list[float]] = {}
 _RATE_LIMIT_WINDOW = 60.0  # seconds
@@ -101,6 +121,8 @@ _RATE_LIMIT_MAX_REQUESTS = 180  # per IP per window
 
 @web.middleware
 async def rate_limit_middleware(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        return await handler(request)
     ip = request.remote or "127.0.0.1"
     # Skip rate limiting for local loopback in testing
     is_test = os.getenv('TESTING') == '1' or request.app.get('testing', False)
@@ -849,7 +871,7 @@ def start_server():
     kalich.init_db()
     ensure_dev_teacher()
     
-    app = web.Application(middlewares=[rate_limit_middleware])
+    app = web.Application(middlewares=[cors_middleware, rate_limit_middleware])
     
     # API endpoints
     app.router.add_get('/api/health', handle_health)

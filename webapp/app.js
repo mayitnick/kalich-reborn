@@ -138,7 +138,8 @@ function escapeHtml(str) {
 
 async function apiFetch(url, options = {}) {
   const headers = options.headers || {};
-  if (tg && tg.initData) {
+  // Only attach Authorization header if not a GET or explicitly requested
+  if (options.method && options.method !== 'GET' && tg && tg.initData) {
     headers["Authorization"] = `Bearer ${tg.initData}`;
   }
   return fetch(url, { ...options, headers });
@@ -313,16 +314,18 @@ async function loadSingleSchedule(day, targetListEl, sourceBadgeEl, isToday = fa
     const res = await apiFetch(`/api/schedule?department=${dept}&group_id=${gid}&day=${day}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    const rawLessons = Array.isArray(data) ? data : (data.lessons || []);
 
-    localStorage.setItem(cacheKey, JSON.stringify(data));
-    state.scheduleCache[cacheKey] = data;
+    localStorage.setItem(cacheKey, JSON.stringify(rawLessons));
+    state.scheduleCache[cacheKey] = rawLessons;
 
-    renderScheduleCards(data.lessons || [], targetListEl, sourceBadgeEl, data.source || "server", isToday);
+    renderScheduleCards(rawLessons, targetListEl, sourceBadgeEl, "server", isToday);
   } catch (err) {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       const data = JSON.parse(cached);
-      renderScheduleCards(data.lessons || [], targetListEl, sourceBadgeEl, "offline-cache", isToday);
+      const rawLessons = Array.isArray(data) ? data : (data.lessons || []);
+      renderScheduleCards(rawLessons, targetListEl, sourceBadgeEl, "offline-cache", isToday);
     } else {
       targetListEl.innerHTML = `
         <div class="empty-state">
@@ -332,6 +335,45 @@ async function loadSingleSchedule(day, targetListEl, sourceBadgeEl, isToday = fa
       `;
     }
   }
+}
+
+function parseLessonSlot(rawItem, slotIdx) {
+  if (!rawItem) return null;
+  if (typeof rawItem === "object") {
+    if (!rawItem.subject || !rawItem.subject.trim()) return null;
+    return {
+      slot_idx: slotIdx,
+      subject: rawItem.subject.trim(),
+      room: rawItem.room || "",
+      teacher: rawItem.teacher || "",
+      is_override: Boolean(rawItem.is_override),
+      override_note: rawItem.override_note || ""
+    };
+  }
+  if (typeof rawItem === "string") {
+    const trimmed = rawItem.trim();
+    if (!trimmed || trimmed.toUpperCase() === "ОБЕД" || trimmed === "-") return null;
+    const match = trimmed.match(/^(.*?)(?:\s*\((.*?)\))?$/);
+    if (match) {
+      return {
+        slot_idx: slotIdx,
+        subject: (match[1] || "").trim(),
+        room: (match[2] || "").trim(),
+        teacher: "",
+        is_override: false,
+        override_note: ""
+      };
+    }
+    return {
+      slot_idx: slotIdx,
+      subject: trimmed,
+      room: "",
+      teacher: "",
+      is_override: false,
+      override_note: ""
+    };
+  }
+  return null;
 }
 
 function renderScheduleCards(lessons, targetListEl, sourceBadgeEl, source, isToday) {
@@ -351,10 +393,17 @@ function renderScheduleCards(lessons, targetListEl, sourceBadgeEl, source, isTod
   }
 
   const pairsData = PAIR_TIMES.map(pInfo => {
-    const lesson = lessons.find(l => pInfo.slots.includes(l.slot_idx) && l.subject && l.subject.trim());
+    let lesson = null;
+    for (const sIdx of pInfo.slots) {
+      const parsed = parseLessonSlot(lessons[sIdx], sIdx);
+      if (parsed) {
+        lesson = parsed;
+        break;
+      }
+    }
     return {
       ...pInfo,
-      lesson: lesson || null
+      lesson
     };
   });
 
