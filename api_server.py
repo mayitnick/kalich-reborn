@@ -792,9 +792,9 @@ async def handle_admin_fill(request):
         return web.json_response({'error': str(e)}, status=500)
 
 
-# Static file serving handlers (supports active miniapp or archived PWA)
+# Static file serving handlers (supports active or archived PWA)
 def _find_pwa_file(filename):
-    for base in ['miniapp', 'pwa', 'archive/pwa']:
+    for base in ['pwa', 'archive/pwa']:
         p = os.path.join(base, filename)
         if os.path.exists(p):
             return p
