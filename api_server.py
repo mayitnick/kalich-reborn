@@ -352,15 +352,146 @@ async def handle_schedule(request):
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
-# Get Teacher Schedule
+# Get Teachers List from DB (db.sqlite3 / schedules.db)
+async def handle_teachers_list(request):
+    try:
+        def sync_teachers_worker():
+            conn = get_db()
+            cur = conn.execute("SELECT name, department, rooms, chat_id FROM teachers WHERE status='approved' OR status='pending' OR status IS NULL")
+            rows = cur.fetchall()
+            conn.close()
+            teachers = []
+            for r in rows:
+                name = r[0] or ""
+                dept = r[1] or 3
+                raw_rooms = r[2] or ""
+                rooms = []
+                if raw_rooms:
+                    try:
+                        parsed = json.loads(raw_rooms)
+                        if isinstance(parsed, list):
+                            rooms = [str(x).strip() for x in parsed if str(x).strip()]
+                    except Exception:
+                        rooms = [x.strip() for x in raw_rooms.split(',') if x.strip()]
+                teachers.append({
+                    'name': name,
+                    'department': dept,
+                    'rooms': rooms,
+                    'chat_id': r[3]
+                })
+            # Sort by name
+            teachers.sort(key=lambda t: t['name'])
+            return teachers
+
+        teachers = await asyncio.to_thread(sync_teachers_worker)
+        return web.json_response({'teachers': teachers})
+    except Exception as e:
+        return web.json_response({'error': str(e), 'teachers': []}, status=500)
+
+
+# Get Teacher or Room Schedule (Public search by room / teacher_name or authorized by chat_id)
 async def handle_teacher_schedule(request):
     try:
-        chat_id = int(request.query.get('chat_id', 0))
+        room_query = (request.query.get('rooms') or request.query.get('room') or '').strip()
+        teacher_query = (request.query.get('teacher_name') or request.query.get('name') or '').strip()
+        dept = int(request.query.get('department', 3))
         day = int(request.query.get('day', 1))
         date_str = request.query.get('date', '')
         if not date_str:
             date_str = kalich.get_date_for_weekday(day)
-            
+
+        # 1. Public Search by Room or Teacher Name
+        if room_query or teacher_query:
+            def sync_search_worker():
+                all_data = kalich.get_all_schedules_for_day(day)
+                all_data = kalich.apply_teacher_overrides(all_data, day, date_str)
+
+                # If teacher query provided, resolve their rooms from DB if needed
+                target_rooms = set()
+                matched_teacher_name = ""
+                if room_query:
+                    clean_room = room_query.replace('каб.', '').replace('каб', '').strip()
+                    target_rooms.add(clean_room.lower())
+
+                if teacher_query:
+                    conn = get_db()
+                    t_rows = conn.execute(
+                        "SELECT name, department, rooms FROM teachers WHERE name LIKE ?",
+                        (f"%{teacher_query}%",)
+                    ).fetchall()
+                    conn.close()
+                    for t in t_rows:
+                        matched_teacher_name = t[0]
+                        raw_r = t[2] or ""
+                        try:
+                            for r in json.loads(raw_r):
+                                target_rooms.add(str(r).strip().lower())
+                        except Exception:
+                            for r in raw_r.split(','):
+                                if r.strip():
+                                    target_rooms.add(r.strip().lower())
+
+                results = []
+                max_slots = 10 if day == 1 else 8
+                from src.services.parser import GROUP_ID_TO_NAME
+
+                for (dep, gid), lessons in all_data.items():
+                    if dept and dep != dept and not teacher_query:
+                        continue
+                    group_name = GROUP_ID_TO_NAME.get(dep, {}).get(gid, f"Группа {gid}")
+
+                    for idx in range(min(len(lessons), max_slots)):
+                        l = lessons[idx]
+                        if not l:
+                            continue
+
+                        subj = ""
+                        room = ""
+                        teacher = ""
+                        is_override = False
+
+                        if isinstance(l, dict):
+                            subj = l.get('subject', '')
+                            room = l.get('room', '')
+                            teacher = l.get('teacher', '')
+                            is_override = bool(l.get('is_override'))
+                        else:
+                            l_str = str(l).strip()
+                            if l_str.upper() == "ОБЕД" or not l_str:
+                                continue
+                            room = kalich.extract_room(l_str)
+                            match = re.match(r'^(.*?)(?:\s*\(.*?\))?$', l_str)
+                            subj = match.group(1).strip() if match else l_str
+
+                        # Check if lesson matches room or teacher
+                        room_clean = room.lower().strip()
+                        matches_room = bool(target_rooms and any(tr == room_clean or tr in room_clean for tr in target_rooms))
+                        matches_teacher = bool(teacher_query and (
+                            (matched_teacher_name and matched_teacher_name.lower() in teacher.lower())
+                            or (teacher_query.lower() in teacher.lower())
+                            or (teacher_query.lower() in subj.lower())
+                        ))
+
+                        if matches_room or matches_teacher:
+                            results.append({
+                                'slot_idx': idx,
+                                'subject': subj,
+                                'room': room,
+                                'group_name': group_name,
+                                'teacher': teacher or matched_teacher_name,
+                                'department': dep,
+                                'is_override': is_override
+                            })
+
+                # Sort by slot_idx, group_name
+                results.sort(key=lambda x: (x['slot_idx'], x['group_name']))
+                return results
+
+            results = await asyncio.to_thread(sync_search_worker)
+            return web.json_response({'schedule': results})
+
+        # 2. Authorized search by chat_id
+        chat_id = int(request.query.get('chat_id', 0))
         if chat_id != 1234567 and not kalich.is_teacher(chat_id) and chat_id not in kalich.MODERATOR_IDS:
             return web.json_response({'error': 'Unauthorized'}, status=401)
             
@@ -878,6 +1009,7 @@ def start_server():
     app.router.add_post('/api/auth', handle_auth)
     app.router.add_post('/api/auth/request_teacher', handle_request_teacher)
     app.router.add_get('/api/groups', handle_groups)
+    app.router.add_get('/api/teachers', handle_teachers_list)
     app.router.add_get('/api/schedule', handle_schedule)
     app.router.add_get('/api/teacher/schedule', handle_teacher_schedule)
     app.router.add_post('/api/override', handle_override)

@@ -36,10 +36,22 @@ DATA_DIR = os.getenv('DATA_DIR', 'data')
 MONITORS_FILE = os.getenv('MONITORS_FILE', os.path.join(DATA_DIR, 'active_monitors.json'))
 CUSTOM_NAMES_FILE = os.getenv('CUSTOM_NAMES_FILE', os.path.join(DATA_DIR, 'custom_names.json'))
 GROUPS_CACHE_FILE = os.getenv('GROUPS_CACHE_FILE', os.path.join(DATA_DIR, 'groups_cache.json'))
-DB_FILE = os.getenv('DB_FILE', os.path.join(DATA_DIR, 'schedules.db'))
+
+db_env = os.getenv('DB_FILE')
+if not db_env:
+    if os.path.exists('db.sqlite3'):
+        db_env = 'db.sqlite3'
+    elif os.path.exists(os.path.join('data', 'db.sqlite3')):
+        db_env = os.path.join('data', 'db.sqlite3')
+    elif os.path.exists(os.path.join(DATA_DIR, 'schedules.db')):
+        db_env = os.path.join(DATA_DIR, 'schedules.db')
+    else:
+        db_env = 'schedules.db'
+DB_FILE = db_env
 
 # ====== ТОКЕНЫ И ДОСТУПЫ ======
 BOT_TOKEN = os.getenv('BOT_TOKEN') or ""
+WEBAPP_URL = os.getenv('WEBAPP_URL', 'https://fin.waifuvpn.ru')
 
 MODERATOR_IDS = []
 mod_ids_env = os.getenv('MODERATOR_ID')

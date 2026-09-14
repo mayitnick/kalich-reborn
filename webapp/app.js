@@ -530,6 +530,36 @@ function updateLiveBellsTimer() {
 // --- Teachers & Rooms Tab Logic ---
 let searchDebounce = null;
 
+async function loadTeachersList() {
+  try {
+    const res = await apiFetch("/api/teachers");
+    if (!res.ok) return;
+    const data = await res.json();
+    const teachers = data.teachers || [];
+    if (teachers.length === 0) return;
+
+    // Add teacher chips to room-chips row
+    const container = dom.roomChips;
+    teachers.slice(0, 10).forEach(t => {
+      if (!t.name) return;
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = t.name;
+      chip.dataset.teacher = t.name;
+      chip.addEventListener("click", () => {
+        haptic("selection");
+        dom.teacherSearchInput.value = t.name;
+        container.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        chip.classList.add("active");
+        searchTeacherSchedule();
+      });
+      container.appendChild(chip);
+    });
+  } catch (e) {
+    console.warn("Could not load teachers list:", e);
+  }
+}
+
 async function searchTeacherSchedule() {
   const query = dom.teacherSearchInput.value.trim();
   const dept = dom.teacherSelectDept.value;
@@ -835,6 +865,7 @@ window.addEventListener("DOMContentLoaded", () => {
   applyTheme(state.theme);
   setupEventListeners();
   loadGroups();
+  loadTeachersList();
   updateLiveBellsTimer();
   checkServerHealth();
 
