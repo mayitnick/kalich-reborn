@@ -55,7 +55,8 @@ const state = {
   defaultGroup: null,
   theme: localStorage.getItem("kalich_theme") || "tg",
   scheduleCache: {},
-  customSelectedDay: null
+  customSelectedDay: null,
+  roomToTeacherMap: {}
 };
 
 // DOM references
@@ -354,21 +355,14 @@ function parseLessonSlot(rawItem, slotIdx) {
     const trimmed = rawItem.trim();
     if (!trimmed || trimmed.toUpperCase() === "ОБЕД" || trimmed === "-") return null;
     const match = trimmed.match(/^(.*?)(?:\s*\((.*?)\))?$/);
-    if (match) {
-      return {
-        slot_idx: slotIdx,
-        subject: (match[1] || "").trim(),
-        room: (match[2] || "").trim(),
-        teacher: "",
-        is_override: false,
-        override_note: ""
-      };
-    }
+    const room = match ? (match[2] || "").trim() : "";
+    const subject = match ? (match[1] || "").trim() : trimmed;
+    const teacher = (room && state.roomToTeacherMap && state.roomToTeacherMap[room]) ? state.roomToTeacherMap[room] : "";
     return {
       slot_idx: slotIdx,
-      subject: trimmed,
-      room: "",
-      teacher: "",
+      subject,
+      room,
+      teacher,
       is_override: false,
       override_note: ""
     };
@@ -538,17 +532,33 @@ async function loadTeachersList() {
     const teachers = data.teachers || [];
     if (teachers.length === 0) return;
 
+    // Build room to teacher map
+    teachers.forEach(t => {
+      const displayName = t.short_name || t.name;
+      if (t.rooms && Array.isArray(t.rooms)) {
+        t.rooms.forEach(r => {
+          if (r && !state.roomToTeacherMap[r]) {
+            state.roomToTeacherMap[r] = displayName;
+          }
+        });
+      }
+    });
+
+    // Refresh schedule cards to display teacher names if already rendered
+    loadMainDashboardSchedule();
+
     // Add teacher chips to room-chips row
     const container = dom.roomChips;
-    teachers.slice(0, 10).forEach(t => {
-      if (!t.name) return;
+    teachers.forEach(t => {
+      const displayName = t.short_name || t.name;
+      if (!displayName) return;
       const chip = document.createElement("span");
       chip.className = "chip";
-      chip.textContent = t.name;
-      chip.dataset.teacher = t.name;
+      chip.textContent = displayName;
+      chip.dataset.teacher = displayName;
       chip.addEventListener("click", () => {
         haptic("selection");
-        dom.teacherSearchInput.value = t.name;
+        dom.teacherSearchInput.value = displayName;
         container.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
         searchTeacherSchedule();
