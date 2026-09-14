@@ -886,8 +886,19 @@ def start_server():
             break
     
     port = int(os.getenv('PWA_PORT', 8999))
-    print(f"[API] Starting web app server on http://localhost:{port}")
-    web.run_app(app, host='0.0.0.0', port=port, handle_signals=False)
+    ssl_cert = os.getenv('SSL_CERT_PATH')
+    ssl_key = os.getenv('SSL_KEY_PATH')
+    ssl_ctx = None
+
+    if ssl_cert and ssl_key and os.path.exists(ssl_cert) and os.path.exists(ssl_key):
+        import ssl
+        ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_ctx.load_cert_chain(certfile=ssl_cert, keyfile=ssl_key)
+        print(f"[API] Starting web app server with SSL on https://0.0.0.0:{port}")
+    else:
+        print(f"[API] Starting web app server on http://localhost:{port}")
+
+    web.run_app(app, host='0.0.0.0', port=port, ssl_context=ssl_ctx, handle_signals=False)
 
 
 if __name__ == '__main__':
