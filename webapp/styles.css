@@ -173,6 +173,77 @@ body {
   display: none;
 }
 
+/* Mode Switcher: /f vs /w */
+.find-mode-switcher {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  background: var(--secondary-bg-color);
+  padding: 4px;
+  border-radius: var(--radius-md);
+}
+
+.find-mode-btn {
+  flex: 1;
+  height: 38px;
+  border: none;
+  background: none;
+  color: var(--hint-color);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.find-mode-btn.active {
+  background: var(--card-bg);
+  color: var(--text-color);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Pair Occupied / Free Cards for /f */
+.pair-occupied-card {
+  border-left: 4px solid var(--accent-color);
+}
+
+.pair-free-card {
+  opacity: 0.55;
+  border: 1px dashed var(--border-color);
+}
+
+.pair-badge-free {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--hint-color);
+}
+
+.pair-badge-occupied {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent-color);
+}
+
+.groups-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.group-tag-pill {
+  background: var(--secondary-bg-color);
+  border: 1px solid var(--border-color);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--link-color);
+}
+
 .filter-card {
   background: var(--card-bg);
   border: 1px solid var(--border-color);

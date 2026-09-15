@@ -68,8 +68,7 @@ const state = {
   defaultGroup: null,
   theme: localStorage.getItem("kalich_theme") || "tg",
   scheduleCache: {},
-  customSelectedDay: null,
-  roomToTeacherMap: {}
+  customSelectedDay: null
 };
 
 // DOM references
@@ -109,12 +108,16 @@ const dom = {
   daysPills: document.getElementById("days-pills"),
   customDayScheduleList: document.getElementById("custom-day-schedule-list"),
   
-  // Teachers Tab
-  teacherSearchInput: document.getElementById("teacher-search-input"),
-  teacherSelectDept: document.getElementById("teacher-select-dept"),
-  teacherSelectDay: document.getElementById("teacher-select-day"),
-  roomChips: document.getElementById("room-chips"),
-  teacherScheduleList: document.getElementById("teacher-schedule-list"),
+  // Find Tab (/f & /w)
+  findModeRoomBtn: document.getElementById("btn-mode-room"),
+  findModeGroupBtn: document.getElementById("btn-mode-group"),
+  findSearchInput: document.getElementById("find-search-input"),
+  findDeptWrapper: document.getElementById("find-dept-wrapper"),
+  findSelectDept: document.getElementById("find-select-dept"),
+  findSelectDay: document.getElementById("find-select-day"),
+  findQuickChips: document.getElementById("find-quick-chips"),
+  findResultsList: document.getElementById("find-results-list"),
+  findEmptyHint: document.getElementById("find-empty-hint"),
   
   // Bells Tab
   bellsList: document.getElementById("bells-list"),
@@ -378,12 +381,11 @@ function parseLessonSlot(rawItem, slotIdx) {
     const match = trimmed.match(/^(.*?)(?:\s*\((.*?)\))?$/);
     const room = match ? (match[2] || "").trim() : "";
     const subject = match ? (match[1] || "").trim() : trimmed;
-    const teacher = (room && state.roomToTeacherMap && state.roomToTeacherMap[room]) ? state.roomToTeacherMap[room] : "";
     return {
       slot_idx: slotIdx,
       subject,
       room,
-      teacher,
+      teacher: "",
       is_override: false,
       override_note: ""
     };
@@ -722,145 +724,237 @@ function updateLiveBellsTimer() {
   if (dom.bellsList) dom.bellsList.innerHTML = listHtml;
 }
 
-// --- Teachers & Rooms Tab Logic ---
-let searchDebounce = null;
+// --- Find Tab (/f & /w) Logic ---
+let findSearchDebounce = null;
+let currentFindMode = "f"; // "f" (кабинет) or "w" (группа)
 
-async function loadTeachersList() {
-  try {
-    const res = await apiFetch("/api/teachers");
-    if (!res.ok) return;
-    const data = await res.json();
-    const teachers = data.teachers || [];
-    if (teachers.length === 0) return;
+const POPULAR_ROOMS = ["42", "25", "13", "32", "5", "26", "35", "43", "21", "1"];
+const POPULAR_GROUPS = ["ИС 21-25", "ИС 31-24", "ИС 41-23", "Э 11-26", "Э 21-25", "ПК 31-24", "РПО 11-26", "СЛ 11-26"];
 
-    // Build room to teacher map
-    teachers.forEach(t => {
-      const displayName = t.short_name || t.name;
-      if (t.rooms && Array.isArray(t.rooms)) {
-        t.rooms.forEach(r => {
-          if (r && !state.roomToTeacherMap[r]) {
-            state.roomToTeacherMap[r] = displayName;
-          }
-        });
-      }
-    });
+function updateFindQuickChips() {
+  if (!dom.findQuickChips) return;
+  dom.findQuickChips.innerHTML = "";
 
-    // Refresh schedule cards to display teacher names if already rendered
-    loadMainDashboardSchedule();
-
-    // Add teacher chips to room-chips row
-    const container = dom.roomChips;
-    teachers.forEach(t => {
-      const displayName = t.short_name || t.name;
-      if (!displayName) return;
+  if (currentFindMode === "f") {
+    POPULAR_ROOMS.forEach(room => {
       const chip = document.createElement("span");
       chip.className = "chip";
-      chip.textContent = displayName;
-      chip.dataset.teacher = displayName;
+      chip.textContent = `Каб. ${room}`;
       chip.addEventListener("click", () => {
         haptic("selection");
-        dom.teacherSearchInput.value = displayName;
-        container.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        dom.findSearchInput.value = room;
+        dom.findQuickChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
-        searchTeacherSchedule();
+        executeFind();
       });
-      container.appendChild(chip);
+      dom.findQuickChips.appendChild(chip);
     });
-  } catch (e) {
-    console.warn("Could not load teachers list:", e);
+  } else {
+    POPULAR_GROUPS.forEach(grp => {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = grp;
+      chip.addEventListener("click", () => {
+        haptic("selection");
+        dom.findSearchInput.value = grp;
+        dom.findQuickChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        chip.classList.add("active");
+        executeFind();
+      });
+      dom.findQuickChips.appendChild(chip);
+    });
   }
 }
 
-async function searchTeacherSchedule() {
-  const query = dom.teacherSearchInput.value.trim();
-  const dept = dom.teacherSelectDept.value;
-  const day = dom.teacherSelectDay.value;
+function setFindMode(mode) {
+  currentFindMode = mode;
+  haptic("selection");
 
-  if (!query) {
-    dom.teacherScheduleList.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">🔍</div>
-        <p>Введите номер кабинета или ФИО преподавателя</p>
-      </div>
-    `;
+  if (dom.findModeRoomBtn) dom.findModeRoomBtn.classList.toggle("active", mode === "f");
+  if (dom.findModeGroupBtn) dom.findModeGroupBtn.classList.toggle("active", mode === "w");
+
+  if (mode === "f") {
+    if (dom.findSearchInput) dom.findSearchInput.placeholder = "Номер кабинета (напр. 42, 25)...";
+    if (dom.findDeptWrapper) dom.findDeptWrapper.style.display = "flex";
+    if (dom.findEmptyHint) dom.findEmptyHint.textContent = "Введите номер кабинета для просмотра занятости пар (/f)";
+  } else {
+    if (dom.findSearchInput) dom.findSearchInput.placeholder = "Название группы (напр. ИС 21-25, 41-23)...";
+    if (dom.findDeptWrapper) dom.findDeptWrapper.style.display = "none";
+    if (dom.findEmptyHint) dom.findEmptyHint.textContent = "Введите название группы для просмотра её расписания (/w)";
+  }
+
+  updateFindQuickChips();
+  if (dom.findSearchInput && dom.findSearchInput.value.trim()) {
+    executeFind();
+  } else {
+    if (dom.findResultsList) {
+      dom.findResultsList.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <p>${dom.findEmptyHint ? dom.findEmptyHint.textContent : ""}</p>
+        </div>
+      `;
+    }
+  }
+}
+
+async function executeFind() {
+  const q = dom.findSearchInput ? dom.findSearchInput.value.trim() : "";
+  const dept = dom.findSelectDept ? dom.findSelectDept.value : 3;
+  const day = dom.findSelectDay ? dom.findSelectDay.value : 1;
+
+  if (!q) {
+    if (dom.findResultsList) {
+      dom.findResultsList.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <p>${currentFindMode === "f" ? "Введите номер кабинета (/f)" : "Введите название группы (/w)"}</p>
+        </div>
+      `;
+    }
     return;
   }
 
-  dom.teacherScheduleList.innerHTML = `
+  dom.findResultsList.innerHTML = `
     <div class="loading-state">
       <div class="spinner"></div>
-      <p>Поиск занятий...</p>
+      <p>Поиск...</p>
     </div>
   `;
 
   try {
-    const isNumericRoom = /^\d+$/.test(query);
-    let url = `/api/teacher/schedule?department=${dept}&day=${day}`;
-    if (isNumericRoom) {
-      url += `&rooms=${encodeURIComponent(query)}`;
-    } else {
-      url += `&teacher_name=${encodeURIComponent(query)}`;
-    }
-
+    const url = `/api/find?mode=${currentFindMode}&q=${encodeURIComponent(q)}&department=${dept}&day=${day}`;
     const res = await apiFetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    renderTeacherSchedule(data.schedule || [], query);
+    if (!res.ok || data.error) {
+      dom.findResultsList.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <p>${escapeHtml(data.error || "Ничего не найдено")}</p>
+        </div>
+      `;
+      return;
+    }
+
+    if (currentFindMode === "f") {
+      renderRoomFindResults(data, q);
+    } else {
+      renderGroupFindResults(data, q);
+    }
   } catch (err) {
-    dom.teacherScheduleList.innerHTML = `
+    console.error("Find error:", err);
+    dom.findResultsList.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">⚠️</div>
-        <p>Ошибка при поиске занятий.</p>
+        <p>Ошибка при выполнении поиска.</p>
       </div>
     `;
   }
 }
 
-function renderTeacherSchedule(schedule = [], query = "") {
-  if (!schedule || schedule.length === 0) {
-    dom.teacherScheduleList.innerHTML = `
+function renderRoomFindResults(data, query) {
+  const pairs = data.pairs || [];
+  if (pairs.length === 0) {
+    dom.findResultsList.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">📖</div>
-        <p>Занятий по запросу «${escapeHtml(query)}» не найдено.</p>
+        <p>Для кабинета ${escapeHtml(query)} данных нет.</p>
       </div>
     `;
     return;
   }
 
-  let html = "";
-  schedule.forEach(item => {
-    const lessonNum = (item.slot_idx !== undefined ? item.slot_idx + 1 : 1);
-    const callInfo = LESSON_CALLS[item.slot_idx] || { start: "", end: "" };
+  let html = `
+    <div class="schedule-status-bar">
+      <span>Кабинет <strong>${escapeHtml(query)}</strong> (отделение ${data.department})</span>
+      <span class="badge badge-success">/f</span>
+    </div>
+  `;
 
-    html += `
-      <div class="lesson-card room-schedule-card ${item.is_override ? "is-override" : ""}">
-        <div class="lesson-header">
-          <div class="lesson-meta-left">
-            <span class="lesson-pair-num">${lessonNum} УРОК</span>
-            <span class="lesson-room">Каб. ${escapeHtml(item.room || "-")}</span>
+  pairs.forEach(p => {
+    if (p.occupied && p.lessons && p.lessons.length > 0) {
+      p.lessons.forEach(item => {
+        const grpsStr = item.groups && item.groups.length > 0 ? item.groups.join(", ") : "";
+        html += `
+          <div class="lesson-card pair-occupied-card">
+            <div class="lesson-header">
+              <span class="lesson-pair-num">${p.pair} ПАРА</span>
+              <span class="badge pair-badge-occupied">Занят</span>
+              <span class="lesson-time">${p.time}</span>
+            </div>
+            <div class="lesson-title">
+              ${escapeHtml(item.subject)}
+            </div>
+            ${grpsStr ? `
+              <div class="groups-pill-list">
+                ${item.groups.map(g => `<span class="group-tag-pill">${escapeHtml(g)}</span>`).join("")}
+              </div>
+            ` : ""}
           </div>
-          <span class="lesson-time">${callInfo.start} — ${callInfo.end}</span>
+        `;
+      });
+    } else {
+      html += `
+        <div class="lesson-card pair-free-card">
+          <div class="lesson-header">
+            <span class="lesson-pair-num">${p.pair} ПАРА</span>
+            <span class="badge pair-badge-free">Свободен</span>
+            <span class="lesson-time">${p.time}</span>
+          </div>
+          <div class="lesson-title" style="font-size: 13px; font-weight: 500; color: var(--hint-color);">
+            Окно (пар нет)
+          </div>
+        </div>
+      `;
+    }
+  });
+
+  dom.findResultsList.innerHTML = html;
+}
+
+function renderGroupFindResults(data, query) {
+  const rawLessons = data.lessons || [];
+  const blocks = buildLessonBlocks(rawLessons);
+
+  if (blocks.length === 0) {
+    dom.findResultsList.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🎉</div>
+        <p>У группы <strong>${escapeHtml(data.group_name || query)}</strong> занятий нет!</p>
+      </div>
+    `;
+    return;
+  }
+
+  let html = `
+    <div class="schedule-status-bar">
+      <span>Группа <strong>${escapeHtml(data.group_name)}</strong> (отд. ${data.department})</span>
+      <span class="badge badge-success">/w</span>
+    </div>
+  `;
+
+  blocks.forEach(b => {
+    html += `
+      <div class="lesson-card ${b.is_override ? "is-override" : ""}">
+        <div class="lesson-header">
+          <span class="lesson-pair-num">${escapeHtml(b.lessonNumsStr)}</span>
+          ${b.room ? `<span class="lesson-room">каб. ${escapeHtml(b.room)}</span>` : ""}
+          <span class="lesson-time">${b.startTime} — ${b.endTime}</span>
         </div>
         <div class="lesson-title">
-          ${escapeHtml(item.subject)}
+          ${escapeHtml(b.subject)}
         </div>
-        <div class="lesson-footer">
-          <span class="lesson-teacher">
-            <strong>Группа:</strong>&nbsp;${escapeHtml(item.group_name || "-")}
-            ${item.teacher ? ` • ${escapeHtml(item.teacher)}` : ""}
-          </span>
-        </div>
-        ${item.is_override ? `
+        ${b.is_override ? `
           <div class="lesson-override-note">
-            ⚠️ Замена: ${escapeHtml(item.override_note || "Изменение в расписании")}
+            ⚠️ Замена: ${escapeHtml(b.override_note || "Изменение в расписании")}
           </div>
-        ` : ''}
+        ` : ""}
       </div>
     `;
   });
 
-  dom.teacherScheduleList.innerHTML = html;
+  dom.findResultsList.innerHTML = html;
 }
 
 // --- Calendar Actions (.ics) ---
@@ -1045,25 +1139,27 @@ function setupEventListeners() {
     });
   });
 
-  // Teachers search
-  dom.teacherSearchInput.addEventListener("input", () => {
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(searchTeacherSchedule, 350);
-  });
+  // Find tab (/f & /w) event listeners
+  if (dom.findModeRoomBtn) {
+    dom.findModeRoomBtn.addEventListener("click", () => setFindMode("f"));
+  }
+  if (dom.findModeGroupBtn) {
+    dom.findModeGroupBtn.addEventListener("click", () => setFindMode("w"));
+  }
 
-  dom.teacherSelectDept.addEventListener("change", searchTeacherSchedule);
-  dom.teacherSelectDay.addEventListener("change", searchTeacherSchedule);
-
-  // Room chips
-  dom.roomChips.querySelectorAll(".chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      haptic("selection");
-      dom.teacherSearchInput.value = chip.dataset.room;
-      dom.roomChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
-      chip.classList.add("active");
-      searchTeacherSchedule();
+  if (dom.findSearchInput) {
+    dom.findSearchInput.addEventListener("input", () => {
+      clearTimeout(findSearchDebounce);
+      findSearchDebounce = setTimeout(executeFind, 300);
     });
-  });
+  }
+
+  if (dom.findSelectDept) {
+    dom.findSelectDept.addEventListener("change", executeFind);
+  }
+  if (dom.findSelectDay) {
+    dom.findSelectDay.addEventListener("change", executeFind);
+  }
 
   // Theme
   dom.themeButtons.forEach(btn => {
@@ -1083,7 +1179,7 @@ window.addEventListener("DOMContentLoaded", () => {
   applyTheme(state.theme);
   setupEventListeners();
   loadGroups();
-  loadTeachersList();
+  updateFindQuickChips();
   updateLiveBellsTimer();
   checkServerHealth();
 

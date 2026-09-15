@@ -353,6 +353,133 @@ async def handle_schedule(request):
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
 
+# Find endpoint implementing bot commands /f (room search) and /w (group search)
+async def handle_find(request):
+    try:
+        mode = (request.query.get('mode') or 'f').strip().lower()
+        q = (request.query.get('q') or request.query.get('query') or '').strip()
+        dept = int(request.query.get('department', 3))
+        day = int(request.query.get('day', 1))
+        date_str = request.query.get('date', '')
+        if not date_str:
+            date_str = kalich.get_date_for_weekday(day)
+
+        if not q:
+            return web.json_response({'error': 'Параметр q обязателен'}, status=400)
+
+        # MODE 1: /f — Find By Room
+        if mode in ('f', 'room'):
+            clean_room = q.replace('каб.', '').replace('каб', '').replace('Каб.', '').replace('Каб', '').strip().lower()
+
+            def sync_room_worker():
+                all_data = kalich.get_all_schedules_for_day(day)
+                all_data = kalich.apply_teacher_overrides(all_data, day, date_str)
+
+                pair_definitions = [
+                    (1, "08:20 — 09:50", [0, 1]),
+                    (2, "10:00 — 11:30", [2, 3]),
+                    (3, "11:35 — 13:10", [4, 5]),
+                    (4, "13:15 — 14:45", [6, 7]),
+                    (5, "14:50 — 16:25", [8, 9]),
+                ]
+
+                results = []
+                for pair_num, pair_time, slot_indices in pair_definitions:
+                    occupied_data = {}  # subj -> list of group names
+
+                    for (dep, gid), lessons in all_data.items():
+                        if dept and dep != dept:
+                            continue
+                        group_name = kalich.GROUP_ID_TO_NAME.get(dep, {}).get(gid, f"Гр. {gid}")
+
+                        for s_idx in slot_indices:
+                            if s_idx < len(lessons):
+                                l = lessons[s_idx]
+                                if not l:
+                                    continue
+                                if isinstance(l, dict):
+                                    subj = l.get('subject', '')
+                                    room = l.get('room', '')
+                                else:
+                                    l_str = str(l).strip()
+                                    if l_str.upper() == "ОБЕД" or not l_str:
+                                        continue
+                                    room = kalich.extract_room(l_str)
+                                    match = re.match(r'^(.*?)(?:\s*\(.*?\))?$', l_str)
+                                    subj = match.group(1).strip() if match else l_str
+
+                                room_lower = (room or '').lower().strip()
+                                if clean_room and (clean_room == room_lower or clean_room in room_lower):
+                                    if subj and subj.upper() != "ОБЕД":
+                                        if subj not in occupied_data:
+                                            occupied_data[subj] = []
+                                        if group_name not in occupied_data[subj]:
+                                            occupied_data[subj].append(group_name)
+
+                    if occupied_data:
+                        items = [{'subject': s, 'groups': grps} for s, grps in occupied_data.items()]
+                        results.append({
+                            'pair': pair_num,
+                            'time': pair_time,
+                            'occupied': True,
+                            'lessons': items
+                        })
+                    else:
+                        results.append({
+                            'pair': pair_num,
+                            'time': pair_time,
+                            'occupied': False,
+                            'lessons': []
+                        })
+
+                return results
+
+            schedule_res = await asyncio.to_thread(sync_room_worker)
+            return web.json_response({
+                'mode': 'f',
+                'query': clean_room,
+                'department': dept,
+                'day': day,
+                'pairs': schedule_res
+            })
+
+        # MODE 2: /w — Find By Group
+        elif mode in ('w', 'group'):
+            target_group = q.strip().upper()
+            matched_name, group_info = kalich.find_group_info(target_group)
+            if not group_info:
+                return web.json_response({
+                    'mode': 'w',
+                    'found': False,
+                    'query': q,
+                    'error': f'Группа "{q}" не найдена'
+                }, status=404)
+
+            group_dep, group_id = group_info[0], group_info[1]
+
+            def sync_group_worker():
+                lessons = get_group_lessons_helper(group_dep, group_id, day, date_str)
+                all_data = {(group_dep, group_id): lessons}
+                overridden = kalich.apply_teacher_overrides(all_data, day, date_str)
+                return overridden.get((group_dep, group_id), lessons)
+
+            lessons_res = await asyncio.to_thread(sync_group_worker)
+            return web.json_response({
+                'mode': 'w',
+                'found': True,
+                'group_name': matched_name,
+                'department': group_dep,
+                'group_id': group_id,
+                'day': day,
+                'lessons': lessons_res
+            })
+
+        else:
+            return web.json_response({'error': f'Неизвестный режим: {mode}. Используйте "f" или "w"'}, status=400)
+    except Exception as e:
+        return web.json_response({'error': str(e)}, status=500)
+
+
 # Get Teachers List from DB (supports Gloris db.sqlite3 persons_teacher and native teachers table)
 async def handle_teachers_list(request):
     try:
@@ -1102,6 +1229,7 @@ def start_server():
     app.router.add_get('/api/teachers', handle_teachers_list)
     app.router.add_get('/api/schedule', handle_schedule)
     app.router.add_get('/api/teacher/schedule', handle_teacher_schedule)
+    app.router.add_get('/api/find', handle_find)
     app.router.add_post('/api/override', handle_override)
     app.router.add_post('/api/sync', handle_sync)
     app.router.add_post('/api/settings', handle_settings)
