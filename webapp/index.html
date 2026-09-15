@@ -6,6 +6,15 @@
   <meta name="color-scheme" content="light dark">
   <title>Калич Помощник</title>
   
+  <!-- PWA & Mobile Meta -->
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Калич">
+  
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
@@ -79,10 +88,28 @@
       
       <!-- TAB 1: MAIN SCHEDULE (СЕГОДНЯ + ЗАВТРА) -->
       <section id="tab-schedule" class="tab-view active">
-        <!-- Live Bells Countdown Card -->
+        <!-- Live Bells Countdown / Now Widget -->
         <div id="bells-live-indicator" class="live-indicator-banner">
-          <div class="live-dot pulse"></div>
-          <div class="live-text" id="live-bells-text">Определение текущей пары...</div>
+          <div class="live-banner-header">
+            <div class="live-badge-wrap">
+              <span class="live-dot pulse"></span>
+              <span class="live-status-title" id="live-status-title">Определение пары...</span>
+            </div>
+            <span class="live-room-badge" id="live-room-badge" style="display:none;">каб. -</span>
+          </div>
+          <div class="live-lesson-name" id="live-lesson-name">Загрузка информации...</div>
+          <div class="live-subgroup-info" id="live-subgroup-info" style="display:none;"></div>
+          <div class="live-time-row">
+            <span class="live-time-range" id="live-time-range">08:20 — 09:50</span>
+            <span class="live-time-left" id="live-time-left">до конца: --</span>
+          </div>
+          <div class="live-progress-container" id="live-progress-container">
+            <div class="live-progress-bar" id="live-progress-bar" style="width: 0%;"></div>
+          </div>
+          <div class="live-next-row" id="live-next-row" style="display:none;">
+            <span class="live-next-label">Следующий:</span>
+            <span class="live-next-content" id="live-next-content">-</span>
+          </div>
         </div>
 
         <!-- SECTION 1: СЕГОДНЯ -->
@@ -268,18 +295,28 @@
           </div>
         </div>
 
-        <div class="settings-card">
-          <h3>О приложении</h3>
+        <div class="settings-card lore-card">
+          <div class="lore-header">
+            <div class="lore-icon">🦊</div>
+            <div>
+              <h3>Калич — твой верный помощник</h3>
+              <span class="lore-sub">«Да-да, я тут! Всё работает стабильно~ [^ v ^]»</span>
+            </div>
+          </div>
           <p class="about-text">
-            <strong>Калич Помощник TMA</strong> — официальное мини-приложение для просмотра расписания пар, замен и аудиторий.
+            Добрый виртуальный чиби-компьютер в больших наушниках 🎧, который знает всё о звонках, парах и заменах в колледже. Бережно хранит твоё расписание, предупреждает об изменениях и помогает не потеряться между корпусами и аудиториями!
           </p>
           <div class="settings-item">
-            <span>Версия</span>
-            <span>2.1.0</span>
+            <span>Версия экосистемы</span>
+            <span>2.2.0 (Reborn TMA & PWA)</span>
           </div>
           <div class="settings-item">
             <span>Статус сервера</span>
             <span id="server-health-badge" class="badge badge-success">В сети</span>
+          </div>
+          <div class="settings-item">
+            <span>Настроение лисички</span>
+            <span class="badge badge-success">[^ v ^] Отличное</span>
           </div>
         </div>
       </section>

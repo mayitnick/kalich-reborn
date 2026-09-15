@@ -1,21 +1,24 @@
 {
   "name": "Калич Помощник",
   "short_name": "Калич",
-  "description": "Telegram Mini App для расписания пар и замен",
+  "description": "Умное веб-приложение расписания пар, замен и звонков в духе Калича [^ v ^]",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0f172a",
-  "theme_color": "#2563eb",
+  "theme_color": "#0f172a",
   "icons": [
     {
       "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

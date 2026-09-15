@@ -3,6 +3,19 @@
  */
 
 // --- Constants & Config ---
+const LESSON_CALLS = [
+  { slot: 0, num: 1, start: "08:20", end: "09:05", startMin: 8 * 60 + 20, endMin: 9 * 60 + 5 },
+  { slot: 1, num: 2, start: "09:05", end: "09:50", startMin: 9 * 60 + 5, endMin: 9 * 60 + 50 },
+  { slot: 2, num: 3, start: "10:00", end: "10:45", startMin: 10 * 60, endMin: 10 * 60 + 45 },
+  { slot: 3, num: 4, start: "10:45", end: "11:30", startMin: 10 * 60 + 45, endMin: 11 * 60 + 30 },
+  { slot: 4, num: 5, start: "11:35", end: "12:20", startMin: 11 * 60 + 35, endMin: 12 * 60 + 20 },
+  { slot: 5, num: 6, start: "12:25", end: "13:10", startMin: 12 * 60 + 25, endMin: 13 * 60 + 10 },
+  { slot: 6, num: 7, start: "13:15", end: "14:00", startMin: 13 * 60 + 15, endMin: 14 * 60 },
+  { slot: 7, num: 8, start: "14:00", end: "14:45", startMin: 14 * 60, endMin: 14 * 60 + 45 },
+  { slot: 8, num: 9, start: "14:50", end: "15:35", startMin: 14 * 60 + 50, endMin: 15 * 60 + 35 },
+  { slot: 9, num: 10, start: "15:40", end: "16:25", startMin: 15 * 60 + 40, endMin: 16 * 60 + 25 }
+];
+
 const PAIR_TIMES = [
   { pair: 1, slots: [0, 1], start: "08:20", end: "09:50", startMin: 8 * 60 + 20, endMin: 9 * 60 + 50 },
   { pair: 2, slots: [2, 3], start: "10:00", end: "11:30", startMin: 10 * 60, endMin: 11 * 60 + 30 },
@@ -75,7 +88,15 @@ const dom = {
   
   // Main Schedule (Сегодня / Завтра)
   bellsLiveIndicator: document.getElementById("bells-live-indicator"),
-  liveBellsText: document.getElementById("live-bells-text"),
+  liveStatusTitle: document.getElementById("live-status-title"),
+  liveRoomBadge: document.getElementById("live-room-badge"),
+  liveLessonName: document.getElementById("live-lesson-name"),
+  liveSubgroupInfo: document.getElementById("live-subgroup-info"),
+  liveTimeRange: document.getElementById("live-time-range"),
+  liveTimeLeft: document.getElementById("live-time-left"),
+  liveProgressBar: document.getElementById("live-progress-bar"),
+  liveNextRow: document.getElementById("live-next-row"),
+  liveNextContent: document.getElementById("live-next-content"),
   todayDateBadge: document.getElementById("today-date-badge"),
   todaySourceBadge: document.getElementById("today-source-badge"),
   todayScheduleList: document.getElementById("today-schedule-list"),
@@ -370,6 +391,70 @@ function parseLessonSlot(rawItem, slotIdx) {
   return null;
 }
 
+function cleanSubjectForGrouping(t) {
+  return String(t || "").replace(/\(.*?\)/g, "").trim().toLowerCase();
+}
+
+function buildLessonBlocks(lessons) {
+  if (!lessons || lessons.length === 0) return [];
+  const total = Math.min(lessons.length, LESSON_CALLS.length);
+  const blocks = [];
+  let i = 0;
+
+  while (i < total) {
+    const rawFirst = lessons[i];
+    const parsedFirst = parseLessonSlot(rawFirst, i);
+
+    if (!parsedFirst) {
+      i++;
+      continue;
+    }
+
+    const firstIdx = i;
+    const target = cleanSubjectForGrouping(parsedFirst.subject);
+    let lastIdx = i;
+
+    while (lastIdx + 1 < total) {
+      const nextParsed = parseLessonSlot(lessons[lastIdx + 1], lastIdx + 1);
+      if (!nextParsed) break;
+      if (cleanSubjectForGrouping(nextParsed.subject) !== target) break;
+      if (parsedFirst.room && nextParsed.room && parsedFirst.room !== nextParsed.room) break;
+      lastIdx++;
+    }
+
+    const startCall = LESSON_CALLS[firstIdx];
+    const endCall = LESSON_CALLS[lastIdx];
+    const durationMin = endCall.endMin - startCall.startMin;
+    const count = lastIdx - firstIdx + 1;
+    const lessonNumsStr = firstIdx === lastIdx
+      ? `${firstIdx + 1} УРОК`
+      : `${firstIdx + 1}–${lastIdx + 1} УРОКИ`;
+
+    blocks.push({
+      firstIdx,
+      lastIdx,
+      firstNum: firstIdx + 1,
+      lastNum: lastIdx + 1,
+      lessonNumsStr,
+      startTime: startCall.start,
+      endTime: endCall.end,
+      startMin: startCall.startMin,
+      endMin: endCall.endMin,
+      durationMin,
+      count,
+      subject: parsedFirst.subject,
+      room: parsedFirst.room,
+      teacher: parsedFirst.teacher,
+      is_override: parsedFirst.is_override,
+      override_note: parsedFirst.override_note
+    });
+
+    i = lastIdx + 1;
+  }
+
+  return blocks;
+}
+
 function renderScheduleCards(lessons, targetListEl, sourceBadgeEl, source, isToday) {
   if (sourceBadgeEl) {
     sourceBadgeEl.textContent = source === "offline-cache" ? "Офлайн" : "Актуально";
@@ -386,27 +471,13 @@ function renderScheduleCards(lessons, targetListEl, sourceBadgeEl, source, isTod
     return;
   }
 
-  const pairsData = PAIR_TIMES.map(pInfo => {
-    let lesson = null;
-    for (const sIdx of pInfo.slots) {
-      const parsed = parseLessonSlot(lessons[sIdx], sIdx);
-      if (parsed) {
-        lesson = parsed;
-        break;
-      }
-    }
-    return {
-      ...pInfo,
-      lesson
-    };
-  });
+  const blocks = buildLessonBlocks(lessons);
 
-  const hasAny = pairsData.some(p => p.lesson !== null);
-  if (!hasAny) {
+  if (blocks.length === 0) {
     targetListEl.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">🎉</div>
-        <p>Пар не запланировано.</p>
+        <p>Пар и уроков не запланировано.</p>
       </div>
     `;
     return;
@@ -416,38 +487,24 @@ function renderScheduleCards(lessons, targetListEl, sourceBadgeEl, source, isTod
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
   let html = "";
-  pairsData.forEach(p => {
-    const isCurrent = isToday && currentMinutes >= p.startMin && currentMinutes <= p.endMin;
-
-    if (!p.lesson) {
-      html += `
-        <div class="lesson-card ${isCurrent ? "is-current" : ""}" style="opacity: 0.55;">
-          <div class="lesson-header">
-            <span class="lesson-pair-num">${p.pair} ПАРА</span>
-            <span class="lesson-time">${p.start} — ${p.end}</span>
-          </div>
-          <div class="lesson-title" style="font-size: 13px; font-weight: 500; color: var(--hint-color);">
-            Окно (пар нет)
-          </div>
-        </div>
-      `;
-      return;
-    }
-
-    const l = p.lesson;
-    const isOverride = Boolean(l.is_override);
-    const roomStr = l.room ? `каб. ${escapeHtml(l.room)}` : "Каб. не указан";
-    const teacherStr = l.teacher ? escapeHtml(l.teacher) : "Преподаватель не указан";
+  blocks.forEach(b => {
+    const isCurrent = isToday && currentMinutes >= b.startMin && currentMinutes <= b.endMin;
+    const isOverride = Boolean(b.is_override);
+    const roomStr = b.room ? `каб. ${escapeHtml(b.room)}` : "Каб. не указан";
+    const teacherStr = b.teacher ? escapeHtml(b.teacher) : "Преподаватель не указан";
 
     html += `
       <div class="lesson-card ${isCurrent ? "is-current" : ""} ${isOverride ? "is-override" : ""}">
         <div class="lesson-header">
-          <span class="lesson-pair-num">${p.pair} ПАРА</span>
-          ${isCurrent ? '<span class="lesson-current-tag"><span class="live-dot pulse"></span> Идёт сейчас</span>' : ''}
-          <span class="lesson-time">${p.start} — ${p.end}</span>
+          <div class="lesson-meta-left">
+            <span class="lesson-pair-num">${escapeHtml(b.lessonNumsStr)}</span>
+            <span class="lesson-duration-badge">${b.durationMin} мин</span>
+            ${isCurrent ? '<span class="lesson-current-tag"><span class="live-dot pulse"></span> Идёт сейчас</span>' : ''}
+          </div>
+          <span class="lesson-time">${b.startTime} — ${b.endTime}</span>
         </div>
         <div class="lesson-title">
-          ${escapeHtml(l.subject)}
+          ${escapeHtml(b.subject)}
         </div>
         <div class="lesson-footer">
           <span class="lesson-teacher">
@@ -461,7 +518,7 @@ function renderScheduleCards(lessons, targetListEl, sourceBadgeEl, source, isTod
         </div>
         ${isOverride ? `
           <div class="lesson-override-note">
-            ⚠️ Замена: ${escapeHtml(l.override_note || "Изменение в расписании")}
+            ⚠️ Замена: ${escapeHtml(b.override_note || "Изменение в расписании")}
           </div>
         ` : ''}
       </div>
@@ -478,47 +535,191 @@ async function loadCustomDay(day) {
   loadSingleSchedule(day, dom.customDayScheduleList, null, false);
 }
 
-// --- Live Bells Timer ---
+// --- Live Bells Timer & Now Widget ---
 function updateLiveBellsTimer() {
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   const dayOfWeek = now.getDay();
+  const dates = getTodayAndTomorrowDays();
+  const dept = dom.selectDept ? dom.selectDept.value : 3;
+  const gid = state.groupId;
+  const cacheKey = `sch_${dept}_${gid}_${dates.todayDayNum}`;
+  const todayLessons = state.scheduleCache[cacheKey] || [];
+  const blocks = buildLessonBlocks(todayLessons);
 
-  let activePair = null;
-  let nextPair = null;
-
-  PAIR_TIMES.forEach(p => {
-    if (currentMinutes >= p.startMin && currentMinutes <= p.endMin) {
-      activePair = p;
-    } else if (currentMinutes < p.startMin && !nextPair) {
-      nextPair = p;
-    }
-  });
+  const banner = dom.bellsLiveIndicator;
+  if (!banner) return;
 
   if (dayOfWeek === 0) {
-    dom.liveBellsText.textContent = "Сегодня выходной день 🎉";
-  } else if (activePair) {
-    const remaining = activePair.endMin - currentMinutes;
-    dom.liveBellsText.textContent = `Сейчас идёт ${activePair.pair} пара (до звонка: ${remaining} мин)`;
-  } else if (nextPair) {
-    const until = nextPair.startMin - currentMinutes;
-    dom.liveBellsText.textContent = `Перемена. До ${nextPair.pair} пары: ${until} мин`;
+    banner.classList.remove("has-active");
+    if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = "Выходной";
+    if (dom.liveRoomBadge) dom.liveRoomBadge.style.display = "none";
+    if (dom.liveLessonName) dom.liveLessonName.textContent = "Сегодня выходной! Отдыхай и набирайся сил~ [^ v ^]";
+    if (dom.liveSubgroupInfo) dom.liveSubgroupInfo.style.display = "none";
+    if (dom.liveTimeRange) dom.liveTimeRange.textContent = "Занятий нет";
+    if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = "Отдых";
+    if (dom.liveProgressBar) dom.liveProgressBar.style.width = "0%";
+    if (dom.liveNextRow) dom.liveNextRow.style.display = "none";
+  } else if (blocks.length > 0) {
+    const firstBlock = blocks[0];
+    const lastBlock = blocks[blocks.length - 1];
+
+    let activeBlock = null;
+    let nextBlock = null;
+
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (currentMinutes >= b.startMin && currentMinutes <= b.endMin) {
+        activeBlock = b;
+        nextBlock = blocks[i + 1] || null;
+        break;
+      } else if (currentMinutes < b.startMin) {
+        nextBlock = b;
+        break;
+      }
+    }
+
+    if (currentMinutes < firstBlock.startMin) {
+      // Before classes start
+      banner.classList.remove("has-active");
+      const untilStart = firstBlock.startMin - currentMinutes;
+      const untilStr = untilStart >= 60
+        ? `${Math.floor(untilStart / 60)}ч ${untilStart % 60}м`
+        : `${untilStart} мин`;
+
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = `До начала пар: ${untilStr}`;
+      if (dom.liveRoomBadge) {
+        dom.liveRoomBadge.style.display = firstBlock.room ? "inline-block" : "none";
+        dom.liveRoomBadge.textContent = firstBlock.room ? `каб. ${firstBlock.room}` : "";
+      }
+      if (dom.liveLessonName) dom.liveLessonName.textContent = `1 урок: ${firstBlock.subject}`;
+      if (dom.liveSubgroupInfo) dom.liveSubgroupInfo.style.display = "none";
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = `Начало в ${firstBlock.startTime}`;
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = `через ${untilStr}`;
+      if (dom.liveProgressBar) dom.liveProgressBar.style.width = "0%";
+      if (dom.liveNextRow) dom.liveNextRow.style.display = "none";
+
+    } else if (activeBlock) {
+      // Currently during a class block
+      banner.classList.add("has-active");
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = `Сейчас идёт: ${activeBlock.lessonNumsStr}`;
+      if (dom.liveRoomBadge) {
+        dom.liveRoomBadge.style.display = activeBlock.room ? "inline-block" : "none";
+        dom.liveRoomBadge.textContent = activeBlock.room ? `каб. ${activeBlock.room}` : "";
+      }
+      if (dom.liveLessonName) dom.liveLessonName.textContent = activeBlock.subject;
+
+      if (dom.liveSubgroupInfo) {
+        const extra = activeBlock.teacher ? `Преподаватель: ${activeBlock.teacher}` : "";
+        if (extra) {
+          dom.liveSubgroupInfo.style.display = "block";
+          dom.liveSubgroupInfo.textContent = extra;
+        } else {
+          dom.liveSubgroupInfo.style.display = "none";
+        }
+      }
+
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = `Время: ${activeBlock.startTime} — ${activeBlock.endTime}`;
+
+      const elapsed = currentMinutes - activeBlock.startMin;
+      const duration = activeBlock.endMin - activeBlock.startMin;
+      const pct = Math.min(100, Math.max(0, Math.round((elapsed / Math.max(1, duration)) * 100)));
+      const remaining = activeBlock.endMin - currentMinutes;
+      const remHours = Math.floor(remaining / 60);
+      const remMins = remaining % 60;
+      const remStr = remHours > 0 ? `${remHours}ч ${remMins}м` : `${remMins} мин`;
+
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = `Осталось: ${remStr} (${pct}%)`;
+      if (dom.liveProgressBar) dom.liveProgressBar.style.width = `${pct}%`;
+
+      if (dom.liveNextRow) {
+        if (nextBlock) {
+          dom.liveNextRow.style.display = "flex";
+          if (dom.liveNextContent) {
+            dom.liveNextContent.textContent = `${nextBlock.firstNum}. ${nextBlock.subject} (${nextBlock.startTime} — ${nextBlock.endTime})`;
+          }
+        } else {
+          dom.liveNextRow.style.display = "flex";
+          if (dom.liveNextContent) {
+            dom.liveNextContent.textContent = "Это последняя пара на сегодня [^ v ^]";
+          }
+        }
+      }
+
+    } else if (nextBlock) {
+      // Break (перемена) between blocks
+      banner.classList.remove("has-active");
+      const untilNext = nextBlock.startMin - currentMinutes;
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = `Перемена (до звонка: ${untilNext} мин)`;
+      if (dom.liveRoomBadge) {
+        dom.liveRoomBadge.style.display = nextBlock.room ? "inline-block" : "none";
+        dom.liveRoomBadge.textContent = nextBlock.room ? `каб. ${nextBlock.room}` : "";
+      }
+      if (dom.liveLessonName) dom.liveLessonName.textContent = `Следующий: ${nextBlock.subject}`;
+      if (dom.liveSubgroupInfo) dom.liveSubgroupInfo.style.display = "none";
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = `Звонок в ${nextBlock.startTime}`;
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = `${untilNext} мин перерыва`;
+      if (dom.liveProgressBar) dom.liveProgressBar.style.width = "0%";
+      if (dom.liveNextRow) dom.liveNextRow.style.display = "none";
+
+    } else {
+      // All blocks ended for today
+      banner.classList.remove("has-active");
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = "Все пары завершены";
+      if (dom.liveRoomBadge) dom.liveRoomBadge.style.display = "none";
+      if (dom.liveLessonName) dom.liveLessonName.textContent = "Все занятия на сегодня закончились! Можно отдыхать [^ v ^]";
+      if (dom.liveSubgroupInfo) dom.liveSubgroupInfo.style.display = "none";
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = "Учебный день завершён";
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = "Свободное время 🎉";
+      if (dom.liveProgressBar) dom.liveProgressBar.style.width = "100%";
+      if (dom.liveNextRow) dom.liveNextRow.style.display = "none";
+    }
+
   } else {
-    dom.liveBellsText.textContent = "Все пары на сегодня завершены 👋";
+    // Fallback based on generic bells
+    banner.classList.remove("has-active");
+    let activePair = null;
+    let nextPair = null;
+    PAIR_TIMES.forEach(p => {
+      if (currentMinutes >= p.startMin && currentMinutes <= p.endMin) {
+        activePair = p;
+      } else if (currentMinutes < p.startMin && !nextPair) {
+        nextPair = p;
+      }
+    });
+
+    if (activePair) {
+      const remaining = activePair.endMin - currentMinutes;
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = `Сейчас идёт ${activePair.pair} пара`;
+      if (dom.liveLessonName) dom.liveLessonName.textContent = `Звонок через ${remaining} мин`;
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = `${activePair.start} — ${activePair.end}`;
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = `${remaining} мин`;
+    } else if (nextPair) {
+      const until = nextPair.startMin - currentMinutes;
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = `Перемена`;
+      if (dom.liveLessonName) dom.liveLessonName.textContent = `До ${nextPair.pair} пары: ${until} мин`;
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = `Начало в ${nextPair.start}`;
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = `${until} мин`;
+    } else {
+      if (dom.liveStatusTitle) dom.liveStatusTitle.textContent = `Занятий нет`;
+      if (dom.liveLessonName) dom.liveLessonName.textContent = `Все пары на сегодня завершены 👋`;
+      if (dom.liveTimeRange) dom.liveTimeRange.textContent = `-`;
+      if (dom.liveTimeLeft) dom.liveTimeLeft.textContent = `Отдых`;
+    }
   }
 
   // Bells Tab Render
   let listHtml = "";
-  PAIR_TIMES.forEach(p => {
-    const isActive = activePair && activePair.pair === p.pair;
+  LESSON_CALLS.forEach(c => {
+    const isActive = currentMinutes >= c.startMin && currentMinutes <= c.endMin;
     listHtml += `
       <div class="bell-row ${isActive ? "is-active" : ""}">
-        <span class="bell-number">${p.pair} пара</span>
-        <span class="bell-time">${p.start} — ${p.end}</span>
+        <span class="bell-number">${c.num} урок</span>
+        <span class="bell-time">${c.start} — ${c.end}</span>
       </div>
     `;
   });
-  dom.bellsList.innerHTML = listHtml;
+  if (dom.bellsList) dom.bellsList.innerHTML = listHtml;
 }
 
 // --- Teachers & Rooms Tab Logic ---
@@ -629,25 +830,32 @@ function renderTeacherSchedule(schedule = [], query = "") {
 
   let html = "";
   schedule.forEach(item => {
-    const pairNum = Math.floor(item.slot_idx / 2) + 1;
-    const pInfo = PAIR_TIMES.find(p => p.pair === pairNum) || { start: "", end: "" };
+    const lessonNum = (item.slot_idx !== undefined ? item.slot_idx + 1 : 1);
+    const callInfo = LESSON_CALLS[item.slot_idx] || { start: "", end: "" };
 
     html += `
-      <div class="lesson-card ${item.is_override ? "is-override" : ""}">
+      <div class="lesson-card room-schedule-card ${item.is_override ? "is-override" : ""}">
         <div class="lesson-header">
-          <span class="lesson-pair-num">${pairNum} ПАРА</span>
-          <span class="lesson-time">${pInfo.start} — ${pInfo.end}</span>
+          <div class="lesson-meta-left">
+            <span class="lesson-pair-num">${lessonNum} УРОК</span>
+            <span class="lesson-room">Каб. ${escapeHtml(item.room || "-")}</span>
+          </div>
+          <span class="lesson-time">${callInfo.start} — ${callInfo.end}</span>
         </div>
         <div class="lesson-title">
           ${escapeHtml(item.subject)}
         </div>
         <div class="lesson-footer">
           <span class="lesson-teacher">
-            <strong>Группа:</strong> ${escapeHtml(item.group_name || "-")}
+            <strong>Группа:</strong>&nbsp;${escapeHtml(item.group_name || "-")}
             ${item.teacher ? ` • ${escapeHtml(item.teacher)}` : ""}
           </span>
-          <span class="lesson-room">Каб. ${escapeHtml(item.room || "-")}</span>
         </div>
+        ${item.is_override ? `
+          <div class="lesson-override-note">
+            ⚠️ Замена: ${escapeHtml(item.override_note || "Изменение в расписании")}
+          </div>
+        ` : ''}
       </div>
     `;
   });
@@ -879,5 +1087,11 @@ window.addEventListener("DOMContentLoaded", () => {
   updateLiveBellsTimer();
   checkServerHealth();
 
-  setInterval(updateLiveBellsTimer, 60000);
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
+      console.warn('ServiceWorker registration error:', err);
+    });
+  }
+
+  setInterval(updateLiveBellsTimer, 15000);
 });

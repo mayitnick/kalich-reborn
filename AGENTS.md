@@ -51,7 +51,8 @@ Compact operational guide for AI agents. Adhere strictly to the invariants below
 - **Subsystem documentation**:
   - `src/AGENTS.md` — Domain services, scraper caching, analytics headless mode, background daemon loops.
   - `src/core/AGENTS.md` — `ServiceContainer`, `AppContext` typing, `CommandScanner` dynamic dispatch.
+  - `webapp/AGENTS.md` — Telegram Mini App (TMA) & Standalone PWA client, offline caching, UI components.
   - `tests/AGENTS.md` — Test suite fixtures, mocking patterns, and synchronization.
-  - `archive/AGENTS.md` — Archived PWA frontend (`archive/pwa/`); do NOT modify, build, or re-enable without explicit user instruction.
+  - `archive/AGENTS.md` — Archived legacy frontend artifacts (`archive/pwa/`).
 - **Git Commits**:
   - Set author/committer if committing: `MayITNick <123010340+mayitnick@users.noreply.github.com>`.
