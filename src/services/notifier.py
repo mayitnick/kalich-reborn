@@ -14,6 +14,7 @@ from src.database import (
     monitor_manager,
     custom_names_manager
 )
+import src.services.parser as parser
 from src.services.parser import (
     GROUP_NAME_TO_ID,
     GROUP_ID_TO_NAME,
@@ -77,7 +78,7 @@ def format_with_overlap(cid, department, gid, day, idx, raw_text, all_day_data):
             other_l = str(lessons[idx])
             other_room = extract_room(other_l)
             if other_room and other_room == room:
-                gname = GROUP_ID_TO_NAME.get(other_dep, {}).get(other_gid)
+                gname = parser.GROUP_ID_TO_NAME.get(other_dep, {}).get(other_gid)
                 if gname:
                     overlaps.append(gname)
     if overlaps:
@@ -116,7 +117,7 @@ def send_updates_for_day(day, data):
         msg_hash = hashlib.md5(msg.encode()).hexdigest()
 
         cur = conn.execute(
-            "SELECT last_msg_hash, last_message_id FROM user_notifications WHERE chat_id=? AND department=? AND group_id=? AND day=?",
+            "SELECT last_msg_hash, last_message_id, last_lessons_text FROM user_notifications WHERE chat_id=? AND department=? AND group_id=? AND day=?",
             (m['chat_id'], dep, gid, day)
         )
         row = cur.fetchone()
@@ -126,49 +127,49 @@ def send_updates_for_day(day, data):
                 sent = bot.send_message(m['chat_id'], wrap_code(msg), parse_mode='Markdown', message_thread_id=thread_id)
                 msg_id = getattr(sent, 'message_id', None)
                 conn.execute(
-                    "INSERT INTO user_notifications (chat_id, department, group_id, day, last_msg_hash, last_message_id) VALUES (?, ?, ?, ?, ?, ?)",
-                    (m['chat_id'], dep, gid, day, msg_hash, msg_id)
+                    "INSERT INTO user_notifications (chat_id, department, group_id, day, last_msg_hash, last_message_id, last_lessons_text) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (m['chat_id'], dep, gid, day, msg_hash, msg_id, json.dumps(lessons, ensure_ascii=False))
                 )
                 conn.commit()
             except Exception as e:
                 logger.error(f"Error sending update: {e}")
         elif row[0] != msg_hash:
-            last_msg_id = row[1] if len(row) > 1 else None
             # Извлекаем старое расписание для формирования Diff (Phase 6.2)
-            cur_old = conn.execute(
-                "SELECT lessons_text FROM schedules WHERE group_id=? AND day=? AND department=?",
-                (gid, day, dep)
-            ).fetchone()
-            old_lessons = json.loads(cur_old[0]) if cur_old and cur_old[0] else []
+            old_lessons = []
+            if len(row) > 2 and row[2]:
+                try:
+                    old_lessons = json.loads(row[2])
+                except Exception:
+                    old_lessons = []
+            if not old_lessons:
+                cur_old = conn.execute(
+                    "SELECT lessons_text FROM schedules WHERE group_id=? AND day=? AND department=?",
+                    (gid, day, dep)
+                ).fetchone()
+                if cur_old and cur_old[0]:
+                    try:
+                        old_lessons = json.loads(cur_old[0])
+                    except Exception:
+                        pass
+
             diff_text = compute_schedule_diff(old_lessons, lessons)
 
             full_msg = msg
             if diff_text:
                 full_msg = f"⚡ Изменения на {day_of_week}:\n{diff_text}\n\n{msg}"
 
-            edited = False
-            # Механизм Edit Message для предотвращения спама новыми сообщениями (Phase 3.5)
-            if last_msg_id:
-                try:
-                    bot.edit_message_text(
-                        wrap_code(full_msg),
-                        chat_id=m['chat_id'],
-                        message_id=last_msg_id,
-                        parse_mode='Markdown'
-                    )
-                    edited = True
-                except Exception as e:
-                    logger.debug(f"Could not edit previous message, sending new: {e}")
-            if not edited:
-                try:
-                    sent = bot.send_message(m['chat_id'], wrap_code(full_msg), parse_mode='Markdown', message_thread_id=thread_id)
-                    last_msg_id = getattr(sent, 'message_id', None)
-                except Exception as e:
-                    logger.error(f"Error sending update: {e}")
+            # Отправляем новое сообщение, чтобы у пользователя сработал пуш/звук об изменениях
+            try:
+                sent = bot.send_message(m['chat_id'], wrap_code(full_msg), parse_mode='Markdown', message_thread_id=thread_id)
+                new_msg_id = getattr(sent, 'message_id', None)
+            except Exception as e:
+                logger.error(f"Error sending update: {e}")
+                new_msg_id = row[1] if len(row) > 1 else None
+
             try:
                 conn.execute(
-                    "UPDATE user_notifications SET last_msg_hash=?, last_message_id=? WHERE chat_id=? AND department=? AND group_id=? AND day=?",
-                    (msg_hash, last_msg_id, m['chat_id'], dep, gid, day)
+                    "UPDATE user_notifications SET last_msg_hash=?, last_message_id=?, last_lessons_text=? WHERE chat_id=? AND department=? AND group_id=? AND day=?",
+                    (msg_hash, new_msg_id, json.dumps(lessons, ensure_ascii=False), m['chat_id'], dep, gid, day)
                 )
                 conn.commit()
             except Exception as e:
@@ -289,12 +290,24 @@ def morning_broadcast():
                                 cnt += 1
                             try:
                                 thread_id = m.get('message_thread_id') or SPECIAL_CHATS.get(cid)
-                                bot.send_message(
+                                sent = bot.send_message(
                                     cid,
                                     wrap_code(res.strip()),
                                     parse_mode='Markdown',
                                     message_thread_id=thread_id
                                 )
+                                msg_id = getattr(sent, 'message_id', None)
+                                m_hash = hashlib.md5(res.strip().encode()).hexdigest()
+                                conn_mb = get_db_connection()
+                                conn_mb.execute(
+                                    "INSERT INTO user_notifications (chat_id, department, group_id, day, last_msg_hash, last_message_id, last_lessons_text) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                                    "ON CONFLICT(chat_id, department, group_id, day) DO UPDATE SET "
+                                    "last_msg_hash=excluded.last_msg_hash, last_message_id=excluded.last_message_id, last_lessons_text=excluded.last_lessons_text",
+                                    (cid, m['department'], m['group_id'], day, m_hash, msg_id, json.dumps(lessons, ensure_ascii=False))
+                                )
+                                conn_mb.commit()
+                                conn_mb.close()
                             except Exception:
                                 pass
                 sent_today = True
@@ -305,9 +318,24 @@ def morning_broadcast():
         time.sleep(30)
 
 
-# Буфер стабилизации рассылок (Phase 3.5 Debounce)
+# Буфер отложенных ночных рассылок (23:00 - 06:00)
 _DEBOUNCE_BUFFER = {}
-_DEBOUNCE_COOLDOWN = 300.0  # 5 минут тишины перед отправкой изменений по дню
+CHECK_INTERVAL = 300.0  # 5 минут между проверками расписания
+
+
+def trigger_schedule_update(day: int, date_str: str = None):
+    """Регистрирует изменение расписания для дня и рассылает обновления подписчикам."""
+    global _DEBOUNCE_BUFFER
+    now = now_msk()
+    is_silent = (now.hour >= 23 or now.hour < 6)
+    if not is_silent:
+        data = get_all_schedules_for_day(day)
+        send_updates_for_day(day, data)
+    else:
+        _DEBOUNCE_BUFFER[day] = {
+            'last_change': time.time(),
+            'date_str': date_str or get_date_for_weekday(day)
+        }
 
 
 def check_loop():
@@ -315,27 +343,37 @@ def check_loop():
         try:
             now = now_msk()
             is_silent = (now.hour >= 23 or now.hour < 6)
-            wd = now.isoweekday()
-            days = [wd] if wd <= 5 else []
-            days.append(wd + 1 if wd < 5 else 1)
 
-            current_time = time.time()
-            # Проверяем буфер стабилизации: если по дню прошло время cooldown, рассылаем
-            for d in list(_DEBOUNCE_BUFFER.keys()):
-                entry = _DEBOUNCE_BUFFER[d]
-                if current_time - entry['last_change'] >= _DEBOUNCE_COOLDOWN:
+            # Если наступило утро (после 06:00) и есть накопленные ночные изменения — рассылаем
+            if not is_silent and _DEBOUNCE_BUFFER:
+                for d in list(_DEBOUNCE_BUFFER.keys()):
                     del _DEBOUNCE_BUFFER[d]
-                    if not is_silent:
-                        data = get_all_schedules_for_day(d)
-                        send_updates_for_day(d, data)
+                    data = get_all_schedules_for_day(d)
+                    send_updates_for_day(d, data)
+
+            wd = now.isoweekday()
+            if wd in [1, 2, 3, 4]:
+                days = [wd, wd + 1]
+            elif wd == 5:
+                days = [5, 6, 1]  # Пятница, Суббота, Понедельник
+            elif wd == 6:
+                days = [6, 1]     # Суббота, Понедельник
+            else:  # Воскресенье (7)
+                days = [1]        # Понедельник
+
+            # 1. Приоритет №1: все группы с активными подписчиками (гарантированное оповещение без задержек)
+            active_groups = set()
+            for m in monitor_manager.active_monitors.values():
+                try:
+                    active_groups.add((int(m['department']), int(m['group_id'])))
+                except (KeyError, ValueError, TypeError):
+                    pass
 
             for d in set(days):
-                data = get_all_schedules_for_day(d)
                 date_str = get_date_for_weekday(d)
                 day_changed = False
 
-                for name, info in GROUP_NAME_TO_ID.items():
-                    dep, gid = info[0], info[1]
+                for dep, gid in active_groups:
                     raw = fetch_lessons(d, gid, dep)
                     if not raw:
                         continue
@@ -353,14 +391,40 @@ def check_loop():
                         day_changed = True
 
                 if day_changed:
-                    # Обновляем окно стабилизации вместо мгновенного спама (Phase 3.5)
-                    _DEBOUNCE_BUFFER[d] = {
-                        'last_change': time.time(),
-                        'date_str': date_str
-                    }
+                    trigger_schedule_update(d, date_str)
+
+            # 2. Фоновое обновление остальных групп для кэша веб-приложения / поиска
+            other_groups = set()
+            for name, info in getattr(parser, 'GROUP_NAME_TO_ID', {}).items():
+                if isinstance(info, list) and len(info) >= 2:
+                    try:
+                        g_pair = (int(info[0]), int(info[1]))
+                        if g_pair not in active_groups:
+                            other_groups.add(g_pair)
+                    except (ValueError, TypeError):
+                        pass
+
+            for d in set(days):
+                date_str = get_date_for_weekday(d)
+                for dep, gid in other_groups:
+                    try:
+                        raw = fetch_lessons(d, gid, dep)
+                        if not raw:
+                            continue
+                        h = hashlib.md5("".join(raw).encode()).hexdigest()
+                        conn = get_db_connection()
+                        old = conn.execute(
+                            "SELECT content_hash FROM schedules WHERE group_id=? AND day=? AND department=?",
+                            (gid, d, dep)
+                        ).fetchone()
+                        conn.close()
+                        if not old or old[0] != h:
+                            save_schedule_to_db(dep, gid, d, h, json.dumps(raw, ensure_ascii=False), date_str)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.error(f"Check loop error: {e}")
-        time.sleep(60)
+        time.sleep(CHECK_INTERVAL)
 
 
 def get_status():

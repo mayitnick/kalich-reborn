@@ -219,6 +219,11 @@ class NotifierService:
         """Рассылает уведомления об изменении расписания подписанным пользователям."""
         self._mod.send_updates_for_day(day, all_data)
 
+    def trigger_schedule_update(self, day: int, date_str: Optional[str] = None) -> None:
+        """Регистрирует изменение расписания для дня, запуская debounce буфер."""
+        if hasattr(self._mod, 'trigger_schedule_update'):
+            self._mod.trigger_schedule_update(day, date_str)
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._mod, name)
 

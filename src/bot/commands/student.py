@@ -180,7 +180,17 @@ def refresh_gloris_schedule(ctx: AppContext, mons: list, day: int):
             if raw:
                 h = hashlib.md5("".join(raw).encode()).hexdigest()
                 date_str = ctx.db.get_date_for_weekday(day)
-                ctx.db.save_schedule_to_db(dep, gid, day, h, json.dumps(raw, ensure_ascii=False), date_str)
+                conn = ctx.db.get_connection()
+                old = conn.execute(
+                    "SELECT content_hash FROM schedules WHERE group_id=? AND day=? AND department=?",
+                    (gid, day, dep)
+                ).fetchone()
+                conn.close()
+
+                if not old or old[0] != h:
+                    ctx.db.save_schedule_to_db(dep, gid, day, h, json.dumps(raw, ensure_ascii=False), date_str)
+                    if hasattr(ctx, 'notifier') and hasattr(ctx.notifier, 'trigger_schedule_update'):
+                        ctx.notifier.trigger_schedule_update(day, date_str)
         except Exception:
             pass
 
@@ -519,6 +529,103 @@ class UnsubCommand(BaseCommand):
             del ctx.db.monitor_manager.active_monitors[k]
         ctx.db.monitor_manager.save()
         ctx.reply(message, "🗑 Подписки удалены.")
+
+
+class MainCommand(BaseCommand):
+    """Смена или установка основной группы для рассылки и уведомлений в чате/топике."""
+    name = "main"
+    aliases = ["главная", "группа", "setgroup"]
+    description = "Сменить или установить основную группу для уведомлений в текущем чате или топике"
+    requires = ["db", "parser", "config"]
+
+    def execute(self, message: Message, ctx: AppContext, **kwargs):
+        text = message.text or ""
+        parts = text.strip().split(maxsplit=1)
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        chat_id = message.chat.id
+        thread_id = getattr(message, 'message_thread_id', None)
+
+        if not arg:
+            current_mons = [
+                v for v in ctx.db.monitor_manager.active_monitors.values()
+                if str(v.get('chat_id')) == str(chat_id) and (
+                    thread_id is None or v.get('message_thread_id') == thread_id
+                )
+            ]
+            if current_mons:
+                curr_name = current_mons[0].get('group_name', 'Неизвестно')
+                curr_dept = current_mons[0].get('department', 3)
+                topic_info = f" (топик #{thread_id})" if thread_id else ""
+                return ctx.reply(
+                    message,
+                    f"📢 Текущая группа для уведомлений{topic_info}: *{curr_name}* (отделение {curr_dept}).\n\n"
+                    f"Чтобы сменить группу, укажите её название:\n"
+                    f"`/main <название группы>`\n"
+                    f"Например: `/main ИС 21-25`",
+                    parse_mode='Markdown'
+                )
+            else:
+                topic_info = f" для топика #{thread_id}" if thread_id else ""
+                return ctx.reply(
+                    message,
+                    f"ℹ️ Основная группа для уведомлений{topic_info} ещё не установлена.\n\n"
+                    f"Чтобы установить группу, напишите:\n"
+                    f"`/main <название группы>`\n"
+                    f"Например: `/main ИС 21-25`",
+                    parse_mode='Markdown'
+                )
+
+        matched_k, group_info = ctx.parser.find_group_info(arg)
+        if not group_info:
+            clean_arg = arg.upper().replace('-', ' ').replace('_', ' ')
+            for k, v in getattr(ctx.parser, 'GROUP_NAME_TO_ID', {}).items():
+                if clean_arg in k.upper().replace('-', ' ') or arg.upper() in k.upper():
+                    matched_k = k
+                    group_info = v
+                    break
+
+        if not group_info:
+            return ctx.reply(
+                message,
+                f"❌ Группа «{arg}» не найдена.\n"
+                f"Проверьте правильность написания, например:\n"
+                f"`/main ИС 21-25`\n"
+                f"`/main РПО 11-26`",
+                parse_mode='Markdown'
+            )
+
+        dept = int(group_info[0])
+        gid = int(group_info[1])
+        group_name = matched_k
+
+        # Удаляем предыдущие подписки этого чата (и этого топика, если есть)
+        to_del = [
+            k for k, v in ctx.db.monitor_manager.active_monitors.items()
+            if str(v.get('chat_id')) == str(chat_id) and (
+                thread_id is None or v.get('message_thread_id') == thread_id
+            )
+        ]
+        for k in to_del:
+            del ctx.db.monitor_manager.active_monitors[k]
+
+        mid = f"{chat_id}_{thread_id}_{dept}_{gid}" if thread_id else f"{chat_id}_{dept}_{gid}"
+        ctx.db.monitor_manager.active_monitors[mid] = {
+            "chat_id": chat_id,
+            "group_id": gid,
+            "group_name": group_name,
+            "department": dept,
+            "message_thread_id": thread_id
+        }
+        ctx.db.monitor_manager.save()
+
+        topic_str = f" в топике #{thread_id}" if thread_id else ""
+        ctx.reply(
+            message,
+            f"✅ Основная группа для уведомлений{topic_str} успешно изменена на *{group_name}* (отделение {dept})!\n\n"
+            f"🔔 Теперь утренние расписания и оперативные уведомления о заменах будут приходить сюда.",
+            parse_mode='Markdown'
+        )
 
 
 class FindByRoomCommand(BaseCommand):

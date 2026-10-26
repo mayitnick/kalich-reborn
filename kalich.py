@@ -76,7 +76,7 @@ from src.services.analytics import (
     get_time_distribution_stats, generate_time_distribution_chart
 )
 from src.services.notifier import (
-    format_with_overlap, send_updates_for_day,
+    format_with_overlap, send_updates_for_day, trigger_schedule_update,
     send_teacher_override_notifications_for_day, teacher_notification_loop,
     morning_broadcast, check_loop, get_status, compute_schedule_diff, get_first_lesson_start
 )
@@ -1011,6 +1011,7 @@ if __name__ == '__main__':
     threading.Thread(target=background_group_updater, daemon=True).start()
     threading.Thread(target=check_loop, daemon=True).start()
     threading.Thread(target=morning_broadcast, daemon=True).start()
+    threading.Thread(target=teacher_notification_loop, daemon=True).start()
 
     # Start PWA/API Web Server
     import api_server

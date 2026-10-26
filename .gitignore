@@ -70,3 +70,10 @@ groups_cache.json
 # Local debug/test scripts
 debug_override.py
 test_regex.py
+
+# Windows / OS files
+desktop.ini
+folder.ico
+folder.jpg
+Thumbs.db
+

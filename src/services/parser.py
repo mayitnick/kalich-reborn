@@ -167,7 +167,9 @@ def update_groups_cache():
 
         # Обратная совместимость с JSON
         try:
-            os.makedirs(os.path.dirname(GROUPS_CACHE_FILE), exist_ok=True)
+            dirname = os.path.dirname(GROUPS_CACHE_FILE)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             with open(GROUPS_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(new_cache, f, ensure_ascii=False, indent=2)
         except Exception as e:

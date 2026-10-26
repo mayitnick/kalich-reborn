@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 def get_db_connection():
     """Создает соединение с SQLite базой с включенным WAL и таймаутом занятости."""
-    os.makedirs(os.path.dirname(config.DB_FILE), exist_ok=True)
+    dirname = os.path.dirname(config.DB_FILE)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
     conn = sqlite3.connect(config.DB_FILE)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout = 5000;")
@@ -65,6 +67,10 @@ def init_db():
                      PRIMARY KEY (chat_id, department, group_id, day))''')
     try:
         conn.execute("ALTER TABLE user_notifications ADD COLUMN last_message_id INTEGER")
+    except Exception as e:
+        logger.debug(f"ALTER TABLE user_notifications warning: {e}")
+    try:
+        conn.execute("ALTER TABLE user_notifications ADD COLUMN last_lessons_text TEXT")
     except Exception as e:
         logger.debug(f"ALTER TABLE user_notifications warning: {e}")
 
@@ -532,7 +538,9 @@ class MonitorManager:
 
         # 2. Обратная совместимость с JSON
         try:
-            os.makedirs(os.path.dirname(MONITORS_FILE), exist_ok=True)
+            dirname = os.path.dirname(MONITORS_FILE)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             with open(MONITORS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.active_monitors, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -590,7 +598,9 @@ class CustomNamesManager:
 
         # 2. Обратная совместимость с JSON
         try:
-            os.makedirs(os.path.dirname(CUSTOM_NAMES_FILE), exist_ok=True)
+            dirname = os.path.dirname(CUSTOM_NAMES_FILE)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             with open(CUSTOM_NAMES_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
         except Exception as e:
